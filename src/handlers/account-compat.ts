@@ -3,6 +3,7 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { jsonResponse, errorResponse } from '../utils/response';
+import { isLastActiveAdmin, purgeUser } from '../services/user-deletion';
 import { generateUUID } from '../utils/uuid';
 
 const HIBP_USERNAME_PATTERN = /^[^\s/?#]{1,254}$/;
@@ -76,4 +77,40 @@ export async function handleHibpBreach(request: Request, env: Env): Promise<Resp
   if (upstream.status === 404) return jsonResponse([]);
   if (!upstream.ok) return errorResponse('HaveIBeenPwned request failed', 502);
   return new Response(upstream.body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+// POST /api/accounts/delete, POST /api/accounts/delete-account, DELETE /api/accounts
+// Permanently deletes the caller's own account and all of its data.
+export async function handleDeleteOwnAccount(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: { masterPasswordHash?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  if (!body.masterPasswordHash) return errorResponse('masterPasswordHash is required', 400);
+
+  const valid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
+  if (!valid) return errorResponse('Invalid password', 400);
+
+  if (await isLastActiveAdmin(storage, user)) {
+    return errorResponse('The last active admin cannot delete their own account', 400);
+  }
+
+  await purgeUser(env, storage, user);
+  await safeWriteAuditEvent(env, {
+    actorUserId: null,
+    action: 'account.delete',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: auditRequestMetadata(request),
+  });
+  return new Response(null, { status: 200 });
 }

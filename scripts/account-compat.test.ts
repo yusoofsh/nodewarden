@@ -5,6 +5,7 @@ import type { Env, User } from '../src/types';
 import { StorageService } from '../src/services/storage';
 import { ensureStorageSchema } from '../src/services/storage-schema';
 import {
+  handleDeleteOwnAccount,
   handleGetTasks,
   handleGetUserPublicKey,
   handleHibpBreach,
@@ -107,4 +108,47 @@ test('security stamp rotation with the right password changes the stamp and revo
   assert.equal(res.status, 200);
   assert.notEqual((await storage.getUserById(id))?.securityStamp, 'stamp-1');
   assert.equal(await storage.getRefreshTokenRecord('tok-1'), null);
+});
+
+async function deleteOwn(env: Env, id: string, masterPasswordHash?: string) {
+  return handleDeleteOwnAccount(
+    new Request('https://x.test', { method: 'POST', body: JSON.stringify({ masterPasswordHash }) }),
+    env,
+    id
+  );
+}
+
+test('account deletion needs the right password and keeps the account otherwise', async () => {
+  const { env, storage } = await setup();
+  const id = '44444444-4444-4444-4444-444444444444';
+  await storage.createUser(makeUser(id, { masterPasswordHash: await createPasswordVerifier('client-hash') }));
+  assert.equal((await deleteOwn(env, id)).status, 400);
+  assert.equal((await deleteOwn(env, id, 'wrong')).status, 400);
+  assert.ok(await storage.getUserById(id));
+});
+
+test('account deletion removes the user and cascades their rows', async () => {
+  const { env, storage } = await setup();
+  const id = '55555555-5555-5555-5555-555555555555';
+  await storage.createUser(makeUser(id, { masterPasswordHash: await createPasswordVerifier('client-hash') }));
+  await env.DB.prepare('INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .bind('folder-1', id, 'enc', '2026-01-01', '2026-01-01')
+    .run();
+  assert.equal((await deleteOwn(env, id, 'client-hash')).status, 200);
+  assert.equal(await storage.getUserById(id), null);
+  const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM folders WHERE user_id = ?').bind(id).first<{ n: number }>();
+  assert.equal(left?.n, 0);
+});
+
+test('the last active admin cannot delete their own account', async () => {
+  const { env, storage } = await setup();
+  const id = '66666666-6666-6666-6666-666666666666';
+  await storage.createUser(
+    makeUser(id, { role: 'admin', masterPasswordHash: await createPasswordVerifier('client-hash') })
+  );
+  assert.equal((await deleteOwn(env, id, 'client-hash')).status, 400);
+  assert.ok(await storage.getUserById(id));
+  const second = '77777777-7777-7777-7777-777777777777';
+  await storage.createUser(makeUser(second, { role: 'admin' }));
+  assert.equal((await deleteOwn(env, id, 'client-hash')).status, 200);
 });
