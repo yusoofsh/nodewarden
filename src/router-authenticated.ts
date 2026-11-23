@@ -9,6 +9,7 @@ import {
   handleSetUserKeyId,
   handleVerifyPassword,
   handleChangePassword,
+  handleChangeKdf,
   handleSetVerifyDevices,
   handleGetTotpStatus,
   handleSetTotpStatus,
@@ -124,7 +125,7 @@ export async function handleAuthenticatedRoute(
   }
 
   if ((path === '/api/accounts/kdf' || path === '/accounts/kdf') && (method === 'POST' || method === 'PUT')) {
-    return unsupportedResponse('KDF changes are not supported by this server.');
+    return handleChangeKdf(request, env, userId);
   }
 
   const mailBackedAccountPaths = new Set([
