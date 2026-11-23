@@ -76,6 +76,7 @@ import {
   handleUpdateAttachmentMetadata,
   handleDeleteAttachment,
 } from './handlers/attachments';
+import { handleRotateUserAccountKeys } from './handlers/key-rotation';
 import {
   handleDeleteOwnAccount,
   handleGetTasks,
@@ -249,6 +250,10 @@ export async function handleAuthenticatedRoute(
     (path === '/api/accounts' && method === 'DELETE')
   ) {
     return handleDeleteOwnAccount(request, env, userId);
+  }
+
+  if (path === '/api/accounts/key-management/rotate-user-account-keys' && method === 'POST') {
+    return handleRotateUserAccountKeys(request, env, userId);
   }
 
   if (path === '/api/accounts/security-stamp' && method === 'POST') {

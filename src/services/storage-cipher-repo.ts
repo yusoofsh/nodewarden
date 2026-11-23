@@ -167,6 +167,25 @@ export async function updateCipherIfUnchanged(
   return result.meta.changes === 1;
 }
 
+// Column values of a cipher row, for callers that write many rows in one statement.
+export function cipherRowValues(cipher: Cipher): Record<string, string | number | null> {
+  const folderId = normalizeOptionalId(cipher.folderId);
+  return {
+    id: cipher.id,
+    type: Number(cipher.type) || 1,
+    folder_id: folderId,
+    name: cipher.name ?? null,
+    notes: cipher.notes ?? null,
+    favorite: cipher.favorite ? 1 : 0,
+    data: buildCipherData(cipher, folderId),
+    reprompt: cipher.reprompt ?? 0,
+    key: cipher.key ?? null,
+    updated_at: cipher.updatedAt,
+    archived_at: cipher.archivedAt ?? null,
+    deleted_at: cipher.deletedAt ?? null,
+  };
+}
+
 function sanitizeIds(ids: string[]): string[] {
   return Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
 }
