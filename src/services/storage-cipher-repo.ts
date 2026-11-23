@@ -167,6 +167,30 @@ export async function updateCipherIfUnchanged(
   return result.meta.changes === 1;
 }
 
+// Unconditional UPDATE for callers that write many rows in one D1 batch.
+// `guard` makes the row change only while the user still has that security stamp.
+export function prepareCipherUpdate(
+  db: D1Database,
+  cipher: Cipher,
+  guard?: { stamp: string }
+): D1PreparedStatement {
+  const folderId = normalizeOptionalId(cipher.folderId);
+  const guarded = guard
+    ? ' AND EXISTS (SELECT 1 FROM users WHERE id = ciphers.user_id AND security_stamp = ?)'
+    : '';
+  return db
+    .prepare(
+      'UPDATE ciphers SET type=?, folder_id=?, name=?, notes=?, favorite=?, data=?, reprompt=?, key=?, updated_at=?, archived_at=?, deleted_at=? ' +
+      'WHERE id=? AND user_id=?' + guarded
+    )
+    .bind(
+      Number(cipher.type) || 1, folderId, cipher.name ?? null, cipher.notes ?? null, cipher.favorite ? 1 : 0,
+      buildCipherData(cipher, folderId), cipher.reprompt ?? 0, cipher.key ?? null, cipher.updatedAt,
+      cipher.archivedAt ?? null, cipher.deletedAt ?? null, cipher.id, cipher.userId,
+      ...(guard ? [guard.stamp] : [])
+    );
+}
+
 function sanitizeIds(ids: string[]): string[] {
   return Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
 }

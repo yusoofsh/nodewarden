@@ -204,7 +204,7 @@ async function writeCipherAudit(
   });
 }
 
-function isValidEncString(value: unknown): value is string {
+export function isValidEncString(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   const dot = trimmed.indexOf('.');
@@ -223,7 +223,7 @@ function isValidEncString(value: unknown): value is string {
   return parts.length >= 1;
 }
 
-function optionalEncString(value: unknown): string | null {
+export function optionalEncString(value: unknown): string | null {
   if (value == null || value === '') return null;
   return isValidEncString(value) ? value.trim() : null;
 }
@@ -627,7 +627,7 @@ function readIncomingAttachmentMetadataMap(
   return out;
 }
 
-function readIncomingAttachmentMetadata(source: any): IncomingAttachmentMetadata[] {
+export function readIncomingAttachmentMetadata(source: any): IncomingAttachmentMetadata[] {
   const merged = new Map<string, IncomingAttachmentMetadata>();
   const legacy = getAliasedProp(source, ['attachments', 'Attachments']);
   const current = getAliasedProp(source, ['attachments2', 'Attachments2']);
@@ -1015,24 +1015,13 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
 }
 
 // PUT /api/ciphers/:id
-export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const existingCipher = await storage.getCipherForUser(id, userId);
-
-  if (!existingCipher || existingCipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
-
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  // Handle nested cipher object
-  // Android client sends PascalCase "Cipher" for organization ciphers
-  const cipherData = body.Cipher || body.cipher || body;
+// Merges a full client cipher payload onto the stored cipher. Shared by the update
+// endpoint and key rotation so both keep the same replacement semantics.
+export function buildFullCipherUpdate(
+  existingCipher: Cipher,
+  cipherData: any,
+  preserveRevisionDate: boolean
+): { cipher: Cipher } | { error: string } {
   const incomingFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
   const incomingKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
   const incomingLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
@@ -1044,17 +1033,8 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
   const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
-  const incomingRevisionDate = readCipherRevisionDate(cipherData);
-  const preserveRevisionDate =
-    shouldPreserveRepairableCipherUris(request)
-    && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
-
   if (incomingKey.present && !shouldAcceptCipherKey(incomingKey.value)) {
-    return errorResponse('Cipher key encryption is not supported by this server. Resync the client and try again.', 400);
-  }
-
-  if (isStaleCipherUpdate(existingCipher.updatedAt, incomingRevisionDate)) {
-    return errorResponse('The client copy of this cipher is out of date. Resync the client and try again.', 400);
+    return { error: 'Cipher key encryption is not supported by this server. Resync the client and try again.' };
   }
 
   const nextType = Number(cipherData.type) || existingCipher.type;
@@ -1109,7 +1089,40 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   cipher.fields = readNullableFullUpdateField<Cipher['fields']>(cipherData, ['fields', 'Fields']);
   normalizeCipherForStorage(cipher);
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
-  if (compatibilityError) return errorResponse(compatibilityError, 400);
+  if (compatibilityError) return { error: compatibilityError };
+  return { cipher };
+}
+
+export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const existingCipher = await storage.getCipherForUser(id, userId);
+
+  if (!existingCipher || existingCipher.userId !== userId) {
+    return errorResponse('Cipher not found', 404);
+  }
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  // Handle nested cipher object
+  // Android client sends PascalCase "Cipher" for organization ciphers
+  const cipherData = body.Cipher || body.cipher || body;
+  const incomingRevisionDate = readCipherRevisionDate(cipherData);
+  const preserveRevisionDate =
+    shouldPreserveRepairableCipherUris(request)
+    && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
+
+  if (isStaleCipherUpdate(existingCipher.updatedAt, incomingRevisionDate)) {
+    return errorResponse('The client copy of this cipher is out of date. Resync the client and try again.', 400);
+  }
+
+  const built = buildFullCipherUpdate(existingCipher, cipherData, preserveRevisionDate);
+  if ('error' in built) return errorResponse(built.error, 400);
+  const cipher = built.cipher;
 
   // Prevent referencing a folder owned by another user.
   if (cipher.folderId) {
