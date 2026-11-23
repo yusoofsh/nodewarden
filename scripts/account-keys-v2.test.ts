@@ -11,6 +11,7 @@ import { handlePublicRoute } from '../src/router-public';
 import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes } from '../src/services/backup-import';
 import { validateAccountKeys } from '../src/utils/account-keys';
+import { isSerializedEncString } from '../src/utils/account-passkeys';
 import { createTestDb } from './lib/d1-sqlite';
 
 // /api/sync caches responses in caches.default, keyed by the user's revision date.
@@ -153,7 +154,7 @@ function rotateUserKeys(over: Record<string, unknown> = {}, unlock: Record<strin
     accountData: {
       ciphers: CIPHERS.map((id) => ({
         id, type: 1, folderId: FOLDER, name: v2(`name-${id}`),
-        login: { username: v2('user'), password: v2('pass'), uris: [] },
+        login: { username: v2('user'), password: v2('pass'), uris: [{ uri: v2('uri'), uriChecksum: v2('checksum'), match: null }] },
       })),
       folders: [{ id: FOLDER, name: v2('folder') }],
       sends: [{ id: SEND, key: v2('sendkey') }],
@@ -217,6 +218,10 @@ test('a V1 account upgrades in place to V2 and keeps its vault, memberships and 
   assert.equal(sync.json.profile.privateKey, v2('private'));
   // The same ciphers, now under the V2 user key.
   assert.deepEqual(sync.json.ciphers.map((x: any) => [x.id, x.name]).sort(), CIPHERS.map((id) => [id, v2(`name-${id}`)]).sort());
+  for (const synced of sync.json.ciphers) {
+    assert.deepEqual([synced.login.username, synced.login.password, synced.login.uris[0].uri, synced.login.uris[0].uriChecksum], [v2('user'), v2('pass'), v2('uri'), v2('checksum')]);
+    assert.equal(synced.folderId, FOLDER);
+  }
   assert.deepEqual(sync.json.folders.map((x: any) => x.name), [v2('folder')]);
   assert.deepEqual(sync.json.sends.map((x: any) => x.key), [v2('sendkey')]);
   // Sessions still holding the V1 user key unwrap the V2 one with the token.
@@ -274,6 +279,34 @@ test('a V1 account upgrades in place to V2 and keeps its vault, memberships and 
     { reset_password_key: '4.djJyZWNvdmVyeQ==', v2_upgrade_token: null },
   ]);
   assert.deepEqual((await call(c, 'GET', `/api/organizations/${ORG}/users/keys/pending-v2-upgrades`, undefined, ADMIN)).json.data, []);
+
+  // The upgraded account keeps writing its vault with COSE (type 7) strings.
+  const folder = await call(c, 'POST', '/api/folders', { name: v2('new-folder') });
+  assert.equal(folder.status, 200, JSON.stringify(folder.json));
+  const created = await call(c, 'POST', '/api/ciphers', {
+    type: 1, name: v2('new'), notes: v2('notes'), folderId: folder.json.id, key: v2('cipher-key'),
+    login: { username: v2('new-user'), password: v2('new-pass'), uris: [{ uri: v2('new-uri'), uriChecksum: v2('new-checksum'), match: null }] },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.json));
+  const updated = await call(c, 'PUT', `/api/ciphers/${created.json.id}`, {
+    ...created.json, name: v2('renamed'), login: { ...created.json.login, password: v2('changed-pass') },
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.json));
+  const send = await call(c, 'POST', '/api/sends', {
+    type: 0, name: v2('new-send'), key: v2('new-send-key'), text: { text: v2('text'), hidden: false },
+    deletionDate: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  assert.equal(send.status, 200, JSON.stringify(send.json));
+  const after = await call(c, 'GET', '/api/sync');
+  const saved = after.json.ciphers.find((x: any) => x.id === created.json.id);
+  assert.deepEqual(
+    [saved.name, saved.notes, saved.key, saved.folderId, saved.login.username, saved.login.password, saved.login.uris[0].uri, saved.login.uris[0].uriChecksum],
+    [v2('renamed'), v2('notes'), v2('cipher-key'), folder.json.id, v2('new-user'), v2('changed-pass'), v2('new-uri'), v2('new-checksum')]
+  );
+  assert.equal(after.json.ciphers.length, CIPHERS.length + 1);
+  assert.ok(after.json.folders.some((x: any) => x.name === v2('new-folder')));
+  assert.ok(after.json.sends.some((x: any) => x.key === v2('new-send-key') && x.name === v2('new-send')));
+  assert.equal(isSerializedEncString(v2('passkey-public-key')), true);
 });
 
 test('a later V2 rotation clears the upgrade token, re-wraps recovery keys and keeps the verifying key', async () => {
