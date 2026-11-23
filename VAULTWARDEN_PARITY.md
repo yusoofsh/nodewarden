@@ -27,7 +27,7 @@ its own `/api/admin/*` and web vault.
 | core/events.rs | 4 | 0 | 0 | 0 |
 | core/folders.rs | 7 | 0 | 0 | 0 |
 | core/mod.rs | 9 | 0 | 0 | 0 |
-| core/organizations.rs | 41 | 0 | 0 | 28 |
+| core/organizations.rs | 68 | 0 | 0 | 1 |
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
@@ -39,7 +39,7 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 205, stub 0, refused 18, unmatched 37
+Total 260: handled 232, stub 0, refused 18, unmatched 10
 
 ## Not in the Vaultwarden route list
 
@@ -50,47 +50,20 @@ Total 260: handled 205, stub 0, refused 18, unmatched 37
 
 <details><summary>core/accounts.rs: refused (8)</summary>
 
-- `POST /api/accounts/delete-recover` (mail)
-- `POST /api/accounts/delete-recover-token` (mail)
-- `POST /api/accounts/email` (mail: the token goes to the new address)
-- `POST /api/accounts/email-token` (mail)
-- `POST /api/accounts/key-management/rotate-user-keys` (Vaultwarden takes only V2 account keys here; this server stores V1 keys and rotates through `rotate-user-account-keys`)
-- `POST /api/accounts/set-password`
-- `POST /api/accounts/verify-email` (mail)
-- `POST /api/accounts/verify-email-token` (mail)
+- `POST /api/accounts/delete-recover-token` (answers 501)
+- `POST /api/accounts/delete-recover` (answers 501)
+- `POST /api/accounts/email-token` (answers 501)
+- `POST /api/accounts/email` (answers 501)
+- `POST /api/accounts/key-management/rotate-user-keys` (answers 501)
+- `POST /api/accounts/set-password` (answers 501)
+- `POST /api/accounts/verify-email-token` (answers 501)
+- `POST /api/accounts/verify-email` (answers 501)
 
 </details>
 
-<details><summary>core/organizations.rs: unmatched (28)</summary>
+<details><summary>core/organizations.rs: unmatched (1)</summary>
 
-- `DELETE /api/organizations/<org_id>/collections`
-- `GET /api/ciphers/organization-details/assigned`
-- `GET /api/organizations/<_org_id>/billing/vnext/self-host/metadata`
-- `GET /api/organizations/<_org_id>/billing/vnext/warnings`
-- `GET /api/organizations/<identifier>/auto-enroll-status`
-- `GET /api/organizations/<org_id>/collections/<col_id>/details`
-- `GET /api/organizations/<org_id>/collections/<col_id>/users`
-- `GET /api/organizations/<org_id>/export`
-- `GET /api/organizations/<org_id>/private-key`
-- `GET /api/organizations/<org_id>/users/<member_id>/reset-password-details`
-- `GET /api/organizations/<org_id>/users/keys/pending-v2-upgrades`
-- `GET /api/organizations/<org_id>/users/mini-details`
-- `GET /api/plans`
-- `POST /api/ciphers/bulk-collections`
-- `POST /api/ciphers/import-organization`
-- `POST /api/organizations/<org_id>/api-key`
-- `POST /api/organizations/<org_id>/collections/bulk-access`
-- `POST /api/organizations/<org_id>/keys`
-- `POST /api/organizations/<org_id>/rotate-api-key`
-- `POST /api/organizations/<org_id>/users/keys/v2-upgrades`
 - `POST /api/organizations/domain/sso/verified`
-- `PUT /api/organizations/<org_id>/users/<member_id>/recover-account`
-- `PUT /api/organizations/<org_id>/users/<member_id>/restore`
-- `PUT /api/organizations/<org_id>/users/<member_id>/restore/vnext`
-- `PUT /api/organizations/<org_id>/users/<member_id>/revoke`
-- `PUT /api/organizations/<org_id>/users/<user_id>/reset-password-enrollment`
-- `PUT /api/organizations/<org_id>/users/restore`
-- `PUT /api/organizations/<org_id>/users/revoke`
 
 </details>
 
@@ -111,26 +84,26 @@ Total 260: handled 205, stub 0, refused 18, unmatched 37
 
 <details><summary>core/two_factor/email.rs: refused (5)</summary>
 
-- `DELETE /api/two-factor/email`
-- `POST /api/two-factor/get-email`
-- `POST /api/two-factor/send-email`
-- `POST /api/two-factor/send-email-login`
-- `PUT /api/two-factor/email`
+- `DELETE /api/two-factor/email` (answers 501)
+- `POST /api/two-factor/get-email` (answers 501)
+- `POST /api/two-factor/send-email-login` (answers 501)
+- `POST /api/two-factor/send-email` (answers 501)
+- `PUT /api/two-factor/email` (answers 501)
 
 </details>
 
 <details><summary>core/two_factor/protected_actions.rs: refused (2)</summary>
 
-- `POST /api/accounts/request-otp`
-- `POST /api/accounts/verify-otp`
+- `POST /api/accounts/request-otp` (answers 501)
+- `POST /api/accounts/verify-otp` (answers 501)
 
 </details>
 
 <details><summary>identity.rs: refused (3)</summary>
 
-- `POST /identity/accounts/register/finish`
-- `POST /identity/accounts/register/send-verification-email`
-- `POST /identity/accounts/register/verification-email-clicked`
+- `POST /identity/accounts/register/finish` (answers 501)
+- `POST /identity/accounts/register/send-verification-email` (answers 501)
+- `POST /identity/accounts/register/verification-email-clicked` (answers 501)
 
 </details>
 
@@ -141,15 +114,3 @@ Total 260: handled 205, stub 0, refused 18, unmatched 37
 - `GET /identity/sso/prevalidate`
 
 </details>
-
-## Order of work
-
-1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Purging an organization vault (owners only, logged as event 1601) and the legacy multipart `attachment-admin` and attachment share uploads came later. Not yet: `organization-details/assigned`. Slice 5 adds the event log (`scripts/events.test.ts`): organization, member, collection, group, policy and organization cipher changes are recorded, clients report views, copies and exports to `POST /events/collect`, and owners and admins read the log for an organization, a member or a cipher. Events are always on (Vaultwarden needs `ORG_EVENTS_ENABLED`), are kept `EVENTS_DAYS_RETAIN` days (365 by default, 0 for ever), and a failed write never fails the request. Personal ciphers, logins, two-factor changes and attachment uploads record no event. The continuation token is the last event's date and id, so a page boundary inside a run of equal dates neither repeats nor skips an event.
-2. Emergency access, which needs user public keys (done) and email.
-3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
-4. Duo, which needs a Duo account to test.
-5. SSO.
-
-## Verification
-
-CI on this repository runs CodeQL and `security-extra` only. It does not run `npm run test:*` or exercise client behaviour. Each change is tested locally on `node:sqlite`, which is not D1, and should be run under `wrangler dev` before a deploy.
