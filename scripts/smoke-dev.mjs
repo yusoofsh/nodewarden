@@ -183,5 +183,35 @@ const deleted = await call('POST', '/api/accounts/delete', { token: second.json?
 check('delete own account', deleted.status === 200, `${deleted.status} ${deleted.text}`);
 check('deleted account cannot log in', (await login(email2, 'hash-x')).status !== 200);
 
+// Emergency access: the first account grants takeover to a third, which takes it over.
+// Runs last because it changes the first account's password.
+const email3 = `smoke3-${run}@example.test`;
+let grantorToken = session.json?.access_token;
+const invite3 = await call('POST', '/api/admin/invites', { token: grantorToken, body: { masterPasswordHash: 'hash-3' } });
+check('register grantee account', (await register(email3, 'hash-g', invite3.json?.code)).status === 200);
+const granteeToken = (await login(email3, 'hash-g')).json?.access_token;
+const ea = (method, path, token, body) => call(method, `/api/emergency-access${path}`, { token, body });
+check('invite emergency contact', (await ea('POST', '/invite', grantorToken, { email: email3, type: 1, waitTimeDays: 1 })).status === 200);
+const trusted = await ea('GET', '/trusted', grantorToken);
+const eaId = trusted.json?.data?.[0]?.id;
+check('invite of an existing account is accepted', trusted.json?.data?.[0]?.status === 1, trusted.text);
+check('grantee sees the grant', (await ea('GET', '/granted', granteeToken)).json?.data?.[0]?.id === eaId);
+check('grantee cannot confirm', (await ea('POST', `/${eaId}/confirm`, granteeToken, { key: '4.x' })).status === 404);
+check('grantor confirms', (await ea('POST', `/${eaId}/confirm`, grantorToken, { key: '4.wrapped' })).json?.status === 2);
+check('grantee initiates', (await ea('POST', `/${eaId}/initiate`, granteeToken)).json?.status === 3);
+check('takeover refused before approval', (await ea('POST', `/${eaId}/takeover`, granteeToken)).status === 400);
+check('grantor approves', (await ea('POST', `/${eaId}/approve`, grantorToken)).json?.status === 4);
+const takeover = await ea('POST', `/${eaId}/takeover`, granteeToken);
+check('takeover returns the grantor KDF and wrapped key', takeover.json?.kdf === 1 && takeover.json?.keyEncrypted === '4.wrapped' && takeover.json?.salt === email, takeover.text);
+const takeoverPassword = await ea('POST', `/${eaId}/password`, granteeToken, { newMasterPasswordHash: 'hash-4', key: enc('userkey4') });
+check('grantee sets the grantor password', takeoverPassword.status === 200, `${takeoverPassword.status} ${takeoverPassword.text}`);
+check('grantor old password no longer logs in', (await login(email, 'hash-3')).status !== 200);
+session = await login(email, 'hash-4');
+check('grantor logs in with the new password', session.status === 200, session.text.slice(0, 200));
+grantorToken = session.json?.access_token;
+check('grantor rejects', (await ea('POST', `/${eaId}/reject`, grantorToken)).json?.status === 2);
+check('grantor removes the contact', (await ea('DELETE', `/${eaId}`, grantorToken)).status === 200);
+check('no contacts left', (await ea('GET', '/trusted', grantorToken)).json?.data?.length === 0);
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
