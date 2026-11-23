@@ -7,6 +7,7 @@ import {
   type BackupPayload,
   EMERGENCY_ACCESS_COLUMNS,
   EVENT_COLUMNS,
+  SSO_USER_COLUMNS,
   isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
@@ -44,7 +45,8 @@ type BackupTableName =
   | 'collection_ciphers'
   | 'attachments'
   | 'emergency_access'
-  | 'events';
+  | 'events'
+  | 'sso_users';
 
 const BACKUP_TABLES: BackupTableName[] = [
   'config',
@@ -66,6 +68,7 @@ const BACKUP_TABLES: BackupTableName[] = [
   'attachments',
   'emergency_access',
   'events',
+  'sso_users',
 ];
 
 function shadowTableName(table: BackupTableName): string {
@@ -197,6 +200,7 @@ async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
 
 function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[] {
   return [
+    'DELETE FROM sso_users',
     'DELETE FROM events',
     'DELETE FROM emergency_access',
     'DELETE FROM attachments',
@@ -365,6 +369,7 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     attachments: cloneRows(payload.attachments || []),
     emergency_access: cloneRows(payload.emergency_access || []),
     events: cloneRows(payload.events || []),
+    sso_users: cloneRows(payload.sso_users || []),
   };
   await importBackupRows(db, preparedDb, true);
   return preparedDb;
@@ -796,6 +801,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(db, tableName('emergency_access'), EMERGENCY_ACCESS_COLUMNS, payload.emergency_access || [])
   );
   await runInsertBatch(db, tableName('events'), buildInsertStatements(db, tableName('events'), EVENT_COLUMNS, payload.events || []));
+  await runInsertBatch(db, tableName('sso_users'), buildInsertStatements(db, tableName('sso_users'), SSO_USER_COLUMNS, payload.sso_users || []));
 }
 
 export async function importBackupArchiveBytes(
@@ -856,6 +862,7 @@ export async function importBackupArchiveBytes(
       collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
+      sso_users: (db.sso_users || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -890,6 +897,7 @@ export async function importBackupArchiveBytes(
       collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
+      sso_users: (db.sso_users || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
@@ -1019,6 +1027,7 @@ export async function importRemoteBackupArchiveBytes(
       collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
+      sso_users: (db.sso_users || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -1053,6 +1062,7 @@ export async function importRemoteBackupArchiveBytes(
       collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
+      sso_users: (db.sso_users || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,

@@ -5,7 +5,7 @@ Target is Vaultwarden 1.0.0 (`src/api/**`). It is measured, not estimated:
 sends each through this server's real route handlers on an in-memory database.
 
 ```sh
-tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json]
+tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json] [--sso]
 ```
 
 - **Handled**: a handler answers the route. A 404 for the sample id still counts.
@@ -27,7 +27,7 @@ its own `/api/admin/*` and web vault.
 | core/events.rs | 4 | 0 | 0 | 0 |
 | core/folders.rs | 7 | 0 | 0 | 0 |
 | core/mod.rs | 9 | 0 | 0 | 0 |
-| core/organizations.rs | 68 | 0 | 0 | 1 |
+| core/organizations.rs | 69 | 0 | 0 | 0 |
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
@@ -37,13 +37,17 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/protected_actions.rs | 0 | 0 | 2 | 0 |
 | core/two_factor/webauthn.rs | 6 | 0 | 0 | 0 |
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
-| identity.rs | 3 | 0 | 3 | 4 |
+| identity.rs | 7 | 0 | 3 | 0 |
 
-Total 260: handled 232, stub 0, refused 18, unmatched 10
+Total 260: handled 237, stub 0, refused 18, unmatched 5
+
+Measured with `--sso`, which configures an OpenID provider. SSO is off unless an operator sets
+`SSO_ENABLED`. While it is off, its four routes fall through as before, so the same run without
+`--sso` reports handled 232 and unmatched 10.
 
 ## Not in the Vaultwarden route list
 
-- **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
+- **SSO.** OpenID Connect sign-in (authorization code with PKCE) serves `/identity/sso/prevalidate`, `/identity/connect/authorize`, `/identity/connect/oidc-signin`, `POST /api/organizations/domain/sso/verified` and the `authorization_code` grant, only when `SSO_ENABLED` is set. It signs in to existing accounts, which unlock with their master password. It refuses what Vaultwarden does beyond that: creating an account through SSO (Vaultwarden then needs `set-password`, which answers 501 here), web and browser clients (they finish on the official web vault's `sso-connector.html`), sessions tied to IdP tokens (Vaultwarden's default; this server issues its own tokens, as with `SSO_AUTH_ONLY_NOT_SESSION`), `SSO_AUDIENCE_TRUSTED`, `SSO_MASTER_PASSWORD_POLICY`, trusted-device encryption and key connector. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
 - **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete or hibp. They serve official clients only. Organization features need web vault screens too.
 
 ## Unhandled and refused routes
@@ -58,12 +62,6 @@ Total 260: handled 232, stub 0, refused 18, unmatched 10
 - `POST /api/accounts/set-password` (answers 501)
 - `POST /api/accounts/verify-email-token` (answers 501)
 - `POST /api/accounts/verify-email` (answers 501)
-
-</details>
-
-<details><summary>core/organizations.rs: unmatched (1)</summary>
-
-- `POST /api/organizations/domain/sso/verified`
 
 </details>
 
@@ -104,13 +102,5 @@ Total 260: handled 232, stub 0, refused 18, unmatched 10
 - `POST /identity/accounts/register/finish` (answers 501)
 - `POST /identity/accounts/register/send-verification-email` (answers 501)
 - `POST /identity/accounts/register/verification-email-clicked` (answers 501)
-
-</details>
-
-<details><summary>identity.rs: unmatched (4)</summary>
-
-- `GET /identity/connect/authorize`
-- `GET /identity/connect/oidc-signin`
-- `GET /identity/sso/prevalidate`
 
 </details>

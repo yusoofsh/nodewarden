@@ -21,6 +21,16 @@ export interface Env {
   HIBP_API_KEY?: string;
   // Days to keep organization events; 365 when unset, 0 keeps them forever.
   EVENTS_DAYS_RETAIN?: string;
+  // SSO (OpenID Connect). Inert unless SSO_ENABLED is true; see README.
+  SSO_ENABLED?: string;
+  SSO_ONLY?: string;
+  SSO_AUTHORITY?: string;
+  SSO_CLIENT_ID?: string;
+  SSO_CLIENT_SECRET?: string;
+  SSO_SCOPES?: string;
+  SSO_PKCE?: string;
+  SSO_SIGNUPS_MATCH_EMAIL?: string;
+  SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION?: string;
   'globalSettings__yubico__validationUrls'?: string;
 }
 
