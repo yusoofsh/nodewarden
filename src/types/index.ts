@@ -17,6 +17,8 @@ export interface Env {
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
   YUBICO_VALIDATION_URLS?: string;
+  // Optional Have I Been Pwned API key for /api/hibp/breach.
+  HIBP_API_KEY?: string;
   'globalSettings__yubico__validationUrls'?: string;
 }
 
