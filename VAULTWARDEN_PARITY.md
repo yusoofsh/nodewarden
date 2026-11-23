@@ -41,7 +41,7 @@ its own `/api/admin/*` and web vault.
 
 Total 260: handled 258, stub 0, refused 2, unmatched 0
 
-Measured with `--mail` and `--sso`, which configure an email provider and an OpenID provider. Both are off unless an operator sets them (`MAIL_PROVIDER` or `SSO_ENABLED`). Without `--mail` the email-backed routes answer 501 and the run reports handled 242 and refused 18. Without either flag it reports handled 237, refused 18 and unmatched 5, because the four SSO routes fall through. Duo needs no flag: its routes answer for every user, and Duo only signs in once a user saves a configuration.
+Measured with `--mail` and `--sso`, which configure an email provider and an OpenID provider. Both are off unless an operator sets them (`RESEND_API_KEY` or `MAIL_WEBHOOK_URL` for mail, `SSO_ENABLED` for SSO). Without `--mail` the email-backed routes answer 501 and the run reports handled 242 and refused 18. Without either flag it reports handled 237, refused 18 and unmatched 5, because the four SSO routes fall through. Duo needs no flag: its routes answer for every user, and Duo only signs in once a user saves a configuration.
 
 ## Not in the Vaultwarden route list
 
