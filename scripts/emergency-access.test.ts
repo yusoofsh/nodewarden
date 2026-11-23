@@ -170,6 +170,14 @@ test('view: an approved view grant reads the grantor vault and attachments, noth
   assert.match(attachment.json.url, new RegExp(`/api/attachments/${CIPHER}/${ATTACHMENT}\\?token=`));
   assert.equal((await stranger('GET', `/api/emergency-access/${id}/${CIPHER}/attachment/${ATTACHMENT}`)).status, 404);
 
+  // The grant reaches the grantor's items only, never another account's.
+  const otherCipher = 'bbbbbbbb-0000-0000-0000-000000000009';
+  const otherAttachment = 'dddddddd-0000-0000-0000-000000000009';
+  await db.prepare("INSERT INTO ciphers(id, user_id, type, data, created_at, updated_at) VALUES (?, ?, 1, '{}', 'now', 'now')").bind(otherCipher, STRANGER).run();
+  await db.prepare("INSERT INTO attachments(id, cipher_id, file_name, size, size_name, key) VALUES (?, ?, 'f', 1, '1 Bytes', 'k')").bind(otherAttachment, otherCipher).run();
+  assert.equal((await grantee('GET', `/api/emergency-access/${id}/${otherCipher}/attachment/${otherAttachment}`)).status, 404);
+  assert.equal((await grantee('GET', `/api/emergency-access/${id}/${CIPHER}/attachment/${otherAttachment}`)).status, 404);
+
   // A view grant cannot take over.
   assert.equal((await grantee('POST', `/api/emergency-access/${id}/takeover`)).status, 400);
   assert.equal((await grantee('POST', `/api/emergency-access/${id}/password`, { newMasterPasswordHash: 'h', key: enc('k') })).status, 400);
