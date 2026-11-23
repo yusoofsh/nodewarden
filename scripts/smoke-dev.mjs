@@ -87,6 +87,17 @@ const selfId = profile.json?.id;
 const publicKey = await call('GET', `/api/users/${selfId}/public-key`, { token });
 check('public key lookup', publicKey.status === 200 && publicKey.json?.publicKey === 'cHVibGljLWtleQ==', publicKey.text);
 
+// Duo stays off until a user saves Duo settings; a bad host is refused before any request to Duo.
+const duo = await call('POST', '/api/two-factor/get-duo', { token, body: { masterPasswordHash: 'hash-1' } });
+check('get-duo reports Duo off', duo.status === 200 && duo.json?.enabled === false && duo.json?.clientSecret === null, `${duo.status} ${duo.text}`);
+const providers = await call('GET', '/api/two-factor', { token });
+check('no two-factor provider is listed', providers.status === 200 && providers.json?.Data?.length === 0, providers.text);
+const badDuo = await call('PUT', '/api/two-factor/duo', {
+  token, body: { masterPasswordHash: 'hash-1', host: 'evil.example.test', clientId: 'DIABCDEFGHIJKLMNOPQR', clientSecret: 'S'.repeat(40) },
+});
+check('a non-Duo host is refused', badDuo.status === 400, `${badDuo.status} ${badDuo.text}`);
+check('DELETE /api/two-factor/duo needs the password', (await call('DELETE', '/api/two-factor/duo', { token, body: { masterPasswordHash: 'wrong' } })).status === 400);
+
 // Key rotation: re-key the account, the folder and the cipher.
 const rotate = await call('POST', '/api/accounts/key-management/rotate-user-account-keys', {
   token,

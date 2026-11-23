@@ -69,6 +69,7 @@ export async function resetUserCredentials(
     user.totpRecoveryCode = null;
     user.yubikeyKey1 = user.yubikeyKey2 = user.yubikeyKey3 = user.yubikeyKey4 = user.yubikeyKey5 = null;
     user.yubikeyNfc = false;
+    user.duoConfig = null;
   }
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();

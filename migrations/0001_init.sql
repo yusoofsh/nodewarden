@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_key_id TEXT,
   avatar_color TEXT,
   email_2fa TEXT,
+  duo_config TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

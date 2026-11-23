@@ -30,6 +30,7 @@ import { getOrganizationApiKey } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { consumeEmailCode, obscureEmail } from '../services/email-codes';
+import { TWO_FACTOR_PROVIDER_DUO, duoClientName, hasDuoConfig, readDuoCredentials, startDuoLogin, verifyDuoLogin, type DuoLoginContext } from '../services/duo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -249,7 +250,8 @@ async function twoFactorRequiredResponse(
   env: Env,
   storage: StorageService,
   user?: User,
-  message: string = 'Two factor required.'
+  message: string = 'Two factor required.',
+  duoLogin?: Omit<DuoLoginContext, 'credentials'>
 ): Promise<Response> {
   // Match Bitwarden Identity: TwoFactorProviders2 lists enabled 2FA providers only.
   // Clients expose recovery-code entry points themselves; Android 2026.4 fails to
@@ -263,6 +265,13 @@ async function twoFactorRequiredResponse(
     webAuthnOptions = await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null;
     if (webAuthnOptions) providers.push(String(TWO_FACTOR_PROVIDER_WEBAUTHN));
   }
+  // Duo is offered only when its prompt can start; other providers stay usable when Duo is down.
+  let duoAuthUrl: string | null = null;
+  if (user && duoLogin && hasDuoConfig(user)) {
+    const credentials = await readDuoCredentials(env, user);
+    duoAuthUrl = credentials ? await startDuoLogin({ ...duoLogin, credentials }).catch(() => null) : null;
+    if (duoAuthUrl) providers.push(String(TWO_FACTOR_PROVIDER_DUO));
+  }
   const providers2: Record<string, Record<string, unknown> | null> = {};
   for (const provider of providers) {
     providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
@@ -271,7 +280,9 @@ async function twoFactorRequiredResponse(
         ? { Email: obscureEmail(user.emailTwoFactor) }
         : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
         ? webAuthnOptions
-        : null;
+        : provider === String(TWO_FACTOR_PROVIDER_DUO)
+          ? { AuthUrl: duoAuthUrl }
+          : null;
   }
   const customResponse = {
     TwoFactorProviders: providers,
@@ -505,8 +516,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const effectiveWebAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+    const duoLogin = {
+      env, storage, request, user,
+      clientName: duoClientName(body.client_id),
+      deviceIdentifier: deviceInfo.deviceIdentifier || '',
+    };
     // Email 2FA stays required when mail is later unconfigured; the recovery code still works.
-    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0 || user.emailTwoFactor) {
+    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0 || hasDuoConfig(user) || user.emailTwoFactor) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
       const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
       let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
@@ -516,7 +532,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream-compatible behavior: if 2FA is required and either provider or token is missing,
       // respond with a 2FA challenge payload.
       if (!hasProvider || !hasToken) {
-        return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+        return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.', duoLogin);
       }
 
       let passedByRememberToken = false;
@@ -531,7 +547,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
         // Remember token missing/invalid/expired should re-enter the 2FA challenge flow.
         if (!passedByRememberToken) {
-          return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+          return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.', duoLogin);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
@@ -582,6 +598,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         } catch {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
+      } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_DUO)) {
+        const credentials = await readDuoCredentials(env, user);
+        if (!credentials || !await verifyDuoLogin({ ...duoLogin, credentials }, normalizedTwoFactorToken)) {
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        }
       } else if (
         normalizedTwoFactorProvider === TWO_FACTOR_PROVIDER_RECOVERY_CODE_RESPONSE ||
         normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_RECOVERY_CODE) ||
@@ -597,6 +618,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         user.yubikeyKey4 = null;
         user.yubikeyKey5 = null;
         user.yubikeyNfc = false;
+        user.duoConfig = null;
         for (const credential of effectiveWebAuthnCredentials) {
           await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
         }

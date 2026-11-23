@@ -68,6 +68,8 @@ export interface User {
   yubikeyKey4: string | null;
   yubikeyKey5: string | null;
   yubikeyNfc: boolean;
+  // Encrypted Duo Universal Prompt settings (src/services/duo.ts); null when Duo is off.
+  duoConfig?: string | null;
   apiKey: string | null;
   // Client-reported id of the current user key (32 lowercase hex chars); metadata only.
   userKeyId?: string | null;
@@ -340,7 +342,8 @@ export type AccountPasskeyChallengeScope =
   | 'CreateCredential'
   | 'UpdateKeySet'
   | 'TwoFactorAuthentication'
-  | 'TwoFactorCreate';
+  | 'TwoFactorCreate'
+  | 'DuoLogin';
 
 export interface AccountPasskeyChallenge {
   challengeHash: string;

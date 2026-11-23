@@ -212,6 +212,7 @@ export async function listMembersWithUsers(db: D1Database, organizationId: strin
       "(u.totp_secret IS NOT NULL AND u.totp_secret != '') " +
       "OR COALESCE(u.yubikey_key1, u.yubikey_key2, u.yubikey_key3, u.yubikey_key4, u.yubikey_key5, '') != '' " +
       "OR COALESCE(u.email_2fa, '') != '' " +
+      "OR COALESCE(u.duo_config, '') != '' " +
       "OR EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id = u.id AND w.purpose = 'twoFactor') AS has_two_factor " +
       'FROM organization_members m INNER JOIN users u ON u.id = m.user_id WHERE m.organization_id = ? ORDER BY m.created_at ASC'
     )
