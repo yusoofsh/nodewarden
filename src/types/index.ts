@@ -86,8 +86,24 @@ export interface User {
   avatarColor?: string | null;
   // Address that email two-step login codes go to; null when that provider is off.
   emailTwoFactor?: string | null;
+  // V2 account keys (src/utils/account-keys.ts). All three are set together, or none (a V1 account).
+  signedPublicKey?: string | null;
+  securityState?: string | null;
+  securityVersion?: number | null;
+  // JSON { wrappedUserKey1, wrappedUserKey2 } left by a V1 to V2 upgrade; null otherwise.
+  v2UpgradeToken?: string | null;
+  // Read from user_signature_key_pairs with the user; written only by saveSignatureKeyPair and key rotation.
+  signatureKeyPair?: UserSignatureKeyPair | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UserSignatureKeyPair {
+  // 0 = ed25519, 1 = mldsa44
+  algorithm: number;
+  // The signing key, wrapped by the user key.
+  signingKey: string;
+  verifyingKey: string;
 }
 
 export interface UserDomainSettings {

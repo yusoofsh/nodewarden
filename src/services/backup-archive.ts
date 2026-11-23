@@ -42,6 +42,7 @@ export const EMERGENCY_ACCESS_COLUMNS = [
   'recovery_initiated_at', 'last_notification_at', 'created_at', 'updated_at',
 ];
 export const SSO_USER_COLUMNS = ['issuer', 'subject', 'user_id', 'created_at'];
+export const USER_SIGNATURE_KEY_PAIR_COLUMNS = ['user_id', 'signature_algorithm', 'signing_key', 'verifying_key', 'created_at', 'updated_at'];
 export const EVENT_COLUMNS = [
   'id', 'type', 'organization_id', 'user_id', 'cipher_id', 'collection_id', 'group_id', 'member_id', 'policy_id',
   'acting_user_id', 'device_type', 'ip_address', 'event_date',
@@ -94,6 +95,7 @@ export interface BackupPayload {
     emergency_access?: SqlRow[];
     events?: SqlRow[];
     sso_users?: SqlRow[];
+    user_signature_key_pairs?: SqlRow[];
   };
 }
 
@@ -312,6 +314,7 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     emergency_access: source.emergency_access as SqlRow[] | undefined,
     events: source.events as SqlRow[] | undefined,
     sso_users: source.sso_users as SqlRow[] | undefined,
+    user_signature_key_pairs: source.user_signature_key_pairs as SqlRow[] | undefined,
   };
 }
 
@@ -649,6 +652,16 @@ export function validateBackupPayloadContents(
     ssoIdentities.add(identity);
     ssoUserIds.add(userId);
   }
+
+  // Optional: archives made before V2 account keys have no such key. At most one pair per account.
+  const keyPairUserIds = new Set<string>();
+  for (const row of ensureRowArray(payload.db.user_signature_key_pairs || [], 'user_signature_key_pairs')) {
+    const userId = String(row.user_id || '').trim();
+    if (!userIds.has(userId) || keyPairUserIds.has(userId) || !row.signing_key || !row.verifying_key) {
+      throw new Error('Backup archive contains an invalid user_signature_key_pairs row');
+    }
+    keyPairUserIds.add(userId);
+  }
 }
 
 export async function buildBackupArchive(
@@ -670,10 +683,10 @@ export async function buildBackupArchive(
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
     organizationRows, memberRows, collectionRows, collectionMemberRows, groupRows, groupMemberRows, collectionGroupRows, policyRows,
-    collectionCipherRows, emergencyAccessRows, eventRows, ssoUserRows,
+    collectionCipherRows, emergencyAccessRows, eventRows, ssoUserRows, signatureKeyPairRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
-    queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, avatar_color, email_2fa, created_at, updated_at FROM users ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, avatar_color, email_2fa, signed_public_key, security_state, security_version, v2_upgrade_token, created_at, updated_at FROM users ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT user_id, revision_date FROM user_revisions ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
@@ -681,7 +694,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, name, billing_email, private_key, public_key, created_at, updated_at FROM organizations ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, external_id, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, external_id, v2_upgrade_token, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM organization_groups ORDER BY created_at ASC, id ASC'),
@@ -693,6 +706,7 @@ export async function buildBackupArchive(
     // Events are a bounded log, like audit_logs: left out of exports so a busy organization cannot produce an archive over the restore size limit.
     Promise.resolve([] as SqlRow[]),
     queryRows(env.DB, `SELECT ${SSO_USER_COLUMNS.join(', ')} FROM sso_users ORDER BY created_at ASC, issuer ASC, subject ASC`),
+    queryRows(env.DB, `SELECT ${USER_SIGNATURE_KEY_PAIR_COLUMNS.join(', ')} FROM user_signature_key_pairs ORDER BY user_id ASC`),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
@@ -733,6 +747,7 @@ export async function buildBackupArchive(
       emergency_access: emergencyAccessRows.length,
       events: eventRows.length,
       sso_users: ssoUserRows.length,
+      user_signature_key_pairs: signatureKeyPairRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -768,6 +783,7 @@ export async function buildBackupArchive(
       emergency_access: emergencyAccessRows,
       events: eventRows,
       sso_users: ssoUserRows,
+      user_signature_key_pairs: signatureKeyPairRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 

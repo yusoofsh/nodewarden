@@ -463,10 +463,82 @@ export async function setMemberRevoked(db: D1Database, organizationId: string, m
 }
 
 export async function setMemberResetPasswordKey(db: D1Database, memberId: string, key: string | null): Promise<void> {
+  // A new key wraps the current user key and a withdrawal leaves none, so an upgrade token left by a
+  // V1 to V2 upgrade has nothing left to re-wrap.
   await db
-    .prepare('UPDATE organization_members SET reset_password_key = ?, updated_at = ? WHERE id = ?')
+    .prepare('UPDATE organization_members SET reset_password_key = ?, v2_upgrade_token = NULL, updated_at = ? WHERE id = ?')
     .bind(key, new Date().toISOString(), memberId)
     .run();
+}
+
+/** The most account recovery V2 upgrades one request reads or writes, as upstream. */
+export const MAX_V2_UPGRADES = 100;
+
+export interface PendingV2Upgrade {
+  memberId: string;
+  userId: string;
+  // The member's current user key id, which the re-wrapped key must be sent back with.
+  userKeyId: string;
+  // The V1 user key, wrapped with the organization's public key.
+  accountRecoveryKey: string;
+  v2UpgradeToken: string;
+}
+
+/**
+ * The next page of memberships whose account recovery key still wraps the member's V1 user key:
+ * enrolled, carrying an upgrade token, of a user with a key id, Owners only for an Owner. Ordered
+ * by id, after `after`, at most MAX_V2_UPGRADES. After Vaultwarden's find_pending_v2_upgrades.
+ */
+export async function listPendingV2Upgrades(
+  db: D1Database,
+  organizationId: string,
+  includeOwners: boolean,
+  after: string | null
+): Promise<PendingV2Upgrade[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT m.id, m.user_id, u.user_key_id, m.reset_password_key, m.v2_upgrade_token FROM organization_members m ' +
+      'JOIN users u ON u.id = m.user_id ' +
+      'WHERE m.organization_id = ? AND m.v2_upgrade_token IS NOT NULL AND m.reset_password_key IS NOT NULL AND u.user_key_id IS NOT NULL ' +
+      `${includeOwners ? '' : `AND m.type != ${MemberType.Owner} `}AND m.id > ? ORDER BY m.id LIMIT ?`
+    )
+    .bind(organizationId, after ?? '', MAX_V2_UPGRADES)
+    .all<any>();
+  return (results || []).map((row) => ({
+    memberId: row.id,
+    userId: row.user_id,
+    userKeyId: row.user_key_id,
+    accountRecoveryKey: row.reset_password_key,
+    v2UpgradeToken: row.v2_upgrade_token,
+  }));
+}
+
+/**
+ * Replaces the account recovery key of a member who upgraded to V2, or unenrolls them when `key` is
+ * null, and consumes the upgrade token, in one batch. Each write applies only while the membership is
+ * still enrolled with a token, is not an Owner unless `includeOwners`, and its user's key id is still
+ * the one sent. Returns, for each upgrade in order, whether it applied.
+ */
+export async function applyV2Upgrades(
+  db: D1Database,
+  organizationId: string,
+  includeOwners: boolean,
+  upgrades: Array<{ memberId: string; userKeyId: string; key: string | null }>
+): Promise<boolean[]> {
+  const now = new Date().toISOString();
+  const results = await db.batch(
+    upgrades.map((upgrade) =>
+      db
+        .prepare(
+          'UPDATE organization_members SET reset_password_key = ?, v2_upgrade_token = NULL, updated_at = ? ' +
+          'WHERE id = ? AND organization_id = ? AND v2_upgrade_token IS NOT NULL AND reset_password_key IS NOT NULL ' +
+          `${includeOwners ? '' : `AND type != ${MemberType.Owner} `}` +
+          'AND EXISTS (SELECT 1 FROM users u WHERE u.id = organization_members.user_id AND u.user_key_id = ?)'
+        )
+        .bind(upgrade.key, now, upgrade.memberId, organizationId, upgrade.userKeyId)
+    )
+  );
+  return results.map((result) => Number(result.meta?.changes || 0) > 0);
 }
 
 /** Sets the organization's key pair when it has none. Returns false when it already had one. */

@@ -10,6 +10,8 @@ import { isStoredApiKeyHash } from '../utils/api-key';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
+import { applyAccountKeys, encStringType, isV2User, validateAccountKeys, type ValidatedAccountKeys } from '../utils/account-keys';
+import { saveSignatureKeyPair, setUserKeyId } from '../services/storage-user-repo';
 import { buildProfileResponse } from '../utils/profile-response';
 import { listProfileMemberships } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
@@ -287,6 +289,9 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
       publicKey?: string;
       encryptedPrivateKey?: string;
     };
+    // Supersedes `keys`, and the only way to register a V2 account; a V1 `accountKeys` is ignored.
+    accountKeys?: unknown;
+    userKeyId?: string;
   };
 
   try {
@@ -295,12 +300,19 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     return errorResponse('Invalid JSON', 400);
   }
 
+  let v2Keys: ValidatedAccountKeys | null = null;
+  if (body.accountKeys != null) {
+    const validated = validateAccountKeys(body.accountKeys);
+    if (typeof validated === 'string') return errorResponse(validated, 400);
+    if (validated.v2) v2Keys = validated;
+  }
+
   const email = body.email?.toLowerCase().trim();
   const name = body.name?.trim() || email;
   const masterPasswordHash = body.masterPasswordHash;
   const key = body.key;
-  const privateKey = body.keys?.encryptedPrivateKey;
-  const publicKey = body.keys?.publicKey;
+  const privateKey = v2Keys ? v2Keys.privateKey : body.keys?.encryptedPrivateKey;
+  const publicKey = v2Keys ? v2Keys.publicKey : body.keys?.publicKey;
   const inviteCode = (body.inviteCode || '').trim();
   const masterPasswordHint = normalizeMasterPasswordHint(body.masterPasswordHint);
 
@@ -316,7 +328,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   if (!looksLikeEncString(key)) {
     return errorResponse('key is not a valid encrypted string', 400);
   }
-  if (!looksLikeEncString(privateKey)) {
+  // A V2 private key is a single-part COSE EncString (type 7).
+  if (v2Keys ? encStringType(privateKey) !== '7' : !looksLikeEncString(privateKey)) {
     return errorResponse('encryptedPrivateKey is not a valid encrypted string', 400);
   }
   if (masterPasswordHint && masterPasswordHint.length > 120) {
@@ -361,6 +374,14 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     createdAt: now,
     updatedAt: now,
   };
+  if (v2Keys) applyAccountKeys(user, v2Keys);
+  // The key pair needs the user row; like Vaultwarden, only a V2 registration records the key id.
+  const saveV2State = async () => {
+    if (!user.signatureKeyPair) return;
+    await saveSignatureKeyPair(env.DB, user.id, user.signatureKeyPair);
+    const userKeyId = String(body.userKeyId || '');
+    if (/^[0-9a-f]{32}$/.test(userKeyId)) await setUserKeyId(env.DB, user.id, userKeyId);
+  };
 
   const userCount = await storage.getUserCount();
   if (userCount === 0) {
@@ -369,6 +390,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     if (!created) {
       return errorResponse('Registration is temporarily unavailable, retry once', 409);
     }
+    await saveV2State();
     await storage.setRegistered();
     await writeAuditEvent(storage, {
       actorUserId: user.id,
@@ -402,6 +424,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     console.error('Registration failed after invite reservation:', error);
     throw error;
   }
+  await saveV2State();
 
   try {
     const assigned = await storage.assignInviteUsedBy(inviteCode, user.id);
@@ -646,6 +669,8 @@ export async function handleSetKeys(request: Request, env: Env, userId: string):
     key?: string;
     encryptedPrivateKey?: string;
     publicKey?: string;
+    accountKeys?: unknown;
+    userKeyId?: string;
   };
 
   try {
@@ -663,19 +688,44 @@ export async function handleSetKeys(request: Request, env: Env, userId: string):
     return errorResponse('Invalid password', 400);
   }
 
+  // V2 keys only for an account without a key pair, as in Vaultwarden. Replacing keys is what a key
+  // rotation does, and only a rotation can change the keys of a V2 account.
+  let v2Keys: ValidatedAccountKeys | null = null;
+  if (body.accountKeys != null) {
+    const validated = validateAccountKeys(body.accountKeys);
+    if (typeof validated === 'string') return errorResponse(validated, 400);
+    if (!validated.v2) return errorResponse('AccountKeys are only supported for V2 encryption.', 400);
+    if (user.privateKey || user.publicKey) return errorResponse('User has existing keypair', 400);
+    v2Keys = validated;
+  } else if (isV2User(user) && (body.key || body.encryptedPrivateKey || body.publicKey)) {
+    return errorResponse('The keys of a V2 encryption account can only change through a key rotation', 400);
+  }
+
   if (body.key && !looksLikeEncString(body.key)) {
     return errorResponse('key is not a valid encrypted string', 400);
   }
-  if (body.encryptedPrivateKey && !looksLikeEncString(body.encryptedPrivateKey)) {
+  if (!v2Keys && body.encryptedPrivateKey && !looksLikeEncString(body.encryptedPrivateKey)) {
     return errorResponse('encryptedPrivateKey is not a valid encrypted string', 400);
   }
 
   if (body.key) user.key = body.key;
-  if (body.encryptedPrivateKey) user.privateKey = body.encryptedPrivateKey;
-  if (body.publicKey) user.publicKey = body.publicKey;
+  if (v2Keys) {
+    applyAccountKeys(user, v2Keys);
+  } else {
+    if (body.encryptedPrivateKey) user.privateKey = body.encryptedPrivateKey;
+    if (body.publicKey) user.publicKey = body.publicKey;
+  }
   user.updatedAt = new Date().toISOString();
 
+  // The key pair first: a V2 account saved without one could not unlock.
+  if (v2Keys && user.signatureKeyPair) await saveSignatureKeyPair(env.DB, user.id, user.signatureKeyPair);
   await storage.saveUser(user);
+  if (v2Keys) {
+    const userKeyId = String(body.userKeyId || '');
+    if (/^[0-9a-f]{32}$/.test(userKeyId) && !user.userKeyId) await setUserKeyId(env.DB, user.id, userKeyId);
+    // Sync responses are cached by revision date and carry accountKeys.
+    await storage.updateRevisionDate(user.id);
+  }
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'account.keys.update',
@@ -797,6 +847,12 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
 
   const nextPrivateKey = body.newEncryptedPrivateKey || body.encryptedPrivateKey;
   const nextPublicKey = body.newPublicKey || body.publicKey;
+  if (
+    isV2User(user) &&
+    ((nextPrivateKey && nextPrivateKey !== user.privateKey) || (nextPublicKey && nextPublicKey !== user.publicKey))
+  ) {
+    return errorResponse('The keys of a V2 encryption account can only change through a key rotation', 400);
+  }
   if (!looksLikeEncString(nextKey)) {
     return errorResponse('new key is not a valid encrypted string', 400);
   }

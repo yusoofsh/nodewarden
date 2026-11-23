@@ -1,27 +1,34 @@
 import { User, UserDecryptionOptions, WebAuthnPrfDecryptionOption } from '../types';
+import { isV2User } from './account-keys';
 
 function normalizeOptionalPublicKey(value: unknown): string {
   if (value == null) return '';
   return String(value);
 }
 
-export function buildAccountKeys(user: Pick<User, 'privateKey' | 'publicKey'>): Record<string, unknown> | null {
+export function buildAccountKeys(
+  user: Pick<User, 'privateKey' | 'publicKey' | 'signedPublicKey' | 'securityState' | 'securityVersion' | 'signatureKeyPair'>
+): Record<string, unknown> | null {
   if (!user.privateKey) {
     return null;
   }
 
   const publicKey = normalizeOptionalPublicKey(user.publicKey);
+  // Like Vaultwarden, the V2 parts only for a V2 account that has its signature key pair.
+  const keyPair = isV2User(user) ? user.signatureKeyPair : null;
 
   return {
     publicKeyEncryptionKeyPair: {
       wrappedPrivateKey: user.privateKey,
       publicKey,
-      signedPublicKey: null,
+      signedPublicKey: keyPair ? user.signedPublicKey : null,
       object: 'publicKeyEncryptionKeyPair',
       Object: 'publicKeyEncryptionKeyPair',
     },
-    securityState: null,
-    signatureKeyPair: null,
+    securityState: keyPair ? { securityState: user.securityState, securityVersion: user.securityVersion } : null,
+    signatureKeyPair: keyPair
+      ? { wrappedSigningKey: keyPair.signingKey, verifyingKey: keyPair.verifyingKey, object: 'signatureKeyPair' }
+      : null,
     object: 'privateKeys',
     Object: 'privateKeys',
   };

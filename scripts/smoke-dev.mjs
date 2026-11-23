@@ -420,7 +420,7 @@ const named = await call('POST', '/api/accounts/profile', { token: grantorToken,
 check('POST /api/accounts/profile renames', named.status === 200 && named.json?.name === 'Renamed', `${named.status} ${named.text.slice(0, 200)}`);
 const rotationData = await call('GET', '/api/accounts/key-management/key-rotation-data', { token: grantorToken });
 check('key rotation data', rotationData.json?.object === 'keyRotationData' && Array.isArray(rotationData.json?.emergencyAccessKeyData), rotationData.text);
-check('rotate-user-keys is refused', (await call('POST', '/api/accounts/key-management/rotate-user-keys', { token: grantorToken, body: {} })).status === 501);
+check('rotate-user-keys refuses an empty body', (await call('POST', '/api/accounts/key-management/rotate-user-keys', { token: grantorToken, body: {} })).status === 400);
 check('GET device verification settings', (await call('GET', '/api/two-factor/get-device-verification-settings', { token: grantorToken })).json?.object === 'deviceVerificationSettings');
 check('webauthn/all without keys is 400', (await call('DELETE', '/api/two-factor/webauthn/all', { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 400);
 const miscFolder = await call('POST', '/api/folders', { token: grantorToken, body: { name: enc('misc') } });
@@ -446,6 +446,53 @@ check('purge needs the password', (await call('POST', '/api/ciphers/purge', { to
 check('purge the personal vault', (await call('POST', '/api/ciphers/purge', { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 200);
 const purged = await call('GET', '/api/sync', { token: grantorToken });
 check('nothing is left after the purge', purged.json?.ciphers?.length === 0 && purged.json?.folders?.length === 0, purged.text.slice(0, 300));
+
+// Upgrade the (now empty) account in place to V2 account keys, keeping the master password.
+const v2 = (label) => `7.${btoa('cose-' + label)}`;
+const beforeUpgrade = purged.json;
+const ownKeys = await call('GET', '/api/accounts/keys', { token: grantorToken });
+const unlock = beforeUpgrade?.UserDecryptionOptions?.MasterPasswordUnlock;
+const upgradeData = await call('GET', '/api/accounts/key-management/key-rotation-data', { token: grantorToken });
+const upgrade = await call('POST', '/api/accounts/key-management/rotate-user-keys', {
+  token: grantorToken,
+  body: {
+    wrappedAccountCryptographicState: {
+      publicKeyEncryptionKeyPair: { wrappedPrivateKey: v2('private'), publicKey: ownKeys.json?.publicKey, signedPublicKey: 'c2lnbmVkLXB1YmxpYy1rZXk=' },
+      signatureKeyPair: { signatureAlgorithm: 'ed25519', wrappedSigningKey: v2('signing'), verifyingKey: 'dmVyaWZ5aW5nLWtleQ==' },
+      securityState: { securityState: 'c2VjdXJpdHktc3RhdGU=', securityVersion: 2 },
+    },
+    unlockData: {
+      emergencyAccessUnlockData: [],
+      organizationAccountRecoveryUnlockData: (upgradeData.json?.organizationPasswordResetKeyData || []).map((o) => ({ organizationId: o.organizationId, resetPasswordKey: null })),
+      passkeyUnlockData: [],
+      deviceKeyUnlockData: [],
+      v2UpgradeToken: { wrappedUserKey1: v2('token-1'), wrappedUserKey2: v2('token-2') },
+    },
+    accountData: { ciphers: [], folders: [], sends: (beforeUpgrade?.sends || []).map((x) => ({ id: x.id, key: v2('send-' + x.id) })) },
+    unlockMethodData: {
+      unlockMethod: 1,
+      masterPasswordUnlockData: {
+        kdf: { kdfType: unlock?.Kdf?.KdfType, iterations: unlock?.Kdf?.Iterations, memory: unlock?.Kdf?.Memory, parallelism: unlock?.Kdf?.Parallelism },
+        salt: unlock?.Salt,
+        masterKeyWrappedUserKey: enc('v2-userkey'),
+      },
+      keyConnectorKeyWrappedUserKey: null,
+    },
+  },
+});
+check('rotate-user-keys upgrades the account to V2', upgrade.status === 200, `${upgrade.status} ${upgrade.text.slice(0, 300)}`);
+session = await login(email, 'hash-4');
+check('the upgraded account logs in with the same password', session.status === 200, session.text.slice(0, 200));
+grantorToken = session.json?.access_token;
+check('the token response carries the V2 keys', session.json?.AccountKeys?.signatureKeyPair?.verifyingKey === 'dmVyaWZ5aW5nLWtleQ==', JSON.stringify(session.json?.AccountKeys));
+const upgraded = await call('GET', '/api/sync', { token: grantorToken });
+check(
+  'sync returns the V2 account keys and the upgrade token',
+  upgraded.json?.profile?.accountKeys?.securityState?.securityVersion === 2 &&
+    upgraded.json?.profile?.accountKeys?.publicKeyEncryptionKeyPair?.signedPublicKey === 'c2lnbmVkLXB1YmxpYy1rZXk=' &&
+    upgraded.json?.UserDecryption?.V2UpgradeToken?.WrappedUserKey1 === v2('token-1'),
+  upgraded.text.slice(0, 400)
+);
 
 // Mail is off unless MAIL_FROM and a provider are set (src/services/mail.ts). Unconfigured,
 // every mail-backed route keeps answering 501. Run with SMOKE_MAIL=on against a server that

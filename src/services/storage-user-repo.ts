@@ -1,10 +1,16 @@
-import type { User } from '../types';
+import type { User, UserSignatureKeyPair } from '../types';
 
 type SafeBind = (stmt: D1PreparedStatement, ...values: any[]) => D1PreparedStatement;
 const USER_SELECT_COLUMNS =
   'id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, ' +
   'kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, ' +
-  'totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, api_key, user_key_id, avatar_color, email_2fa, created_at, updated_at';
+  'totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, api_key, user_key_id, avatar_color, email_2fa, ' +
+  'signed_public_key, security_state, security_version, v2_upgrade_token, ' +
+  // The signature key pair of a V2 account, from its own table like Vaultwarden's.
+  '(SELECT signature_algorithm FROM user_signature_key_pairs k WHERE k.user_id = users.id) AS signature_algorithm, ' +
+  '(SELECT signing_key FROM user_signature_key_pairs k WHERE k.user_id = users.id) AS signing_key, ' +
+  '(SELECT verifying_key FROM user_signature_key_pairs k WHERE k.user_id = users.id) AS verifying_key, ' +
+  'created_at, updated_at';
 
 function mapUserRow(row: any): User {
   return {
@@ -37,6 +43,13 @@ function mapUserRow(row: any): User {
     userKeyId: row.user_key_id ?? null,
     avatarColor: row.avatar_color ?? null,
     emailTwoFactor: row.email_2fa ?? null,
+    signedPublicKey: row.signed_public_key ?? null,
+    securityState: row.security_state ?? null,
+    securityVersion: row.security_version ?? null,
+    v2UpgradeToken: row.v2_upgrade_token ?? null,
+    signatureKeyPair: row.signing_key == null
+      ? null
+      : { algorithm: row.signature_algorithm, signingKey: row.signing_key, verifyingKey: row.verifying_key },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -75,11 +88,11 @@ export async function getAllUsers(db: D1Database): Promise<User[]> {
 export async function saveUser(db: D1Database, safeBind: SafeBind, user: User): Promise<void> {
   const email = user.email.toLowerCase();
   const stmt = db.prepare(
-    'INSERT INTO users(id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, api_key, created_at, updated_at) ' +
-    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'INSERT INTO users(id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, api_key, signed_public_key, security_state, security_version, v2_upgrade_token, created_at, updated_at) ' +
+    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
     'email=excluded.email, name=excluded.name, master_password_hint=excluded.master_password_hint, master_password_hash=excluded.master_password_hash, key=excluded.key, private_key=excluded.private_key, public_key=excluded.public_key, ' +
-    'kdf_type=excluded.kdf_type, kdf_iterations=excluded.kdf_iterations, kdf_memory=excluded.kdf_memory, kdf_parallelism=excluded.kdf_parallelism, security_stamp=excluded.security_stamp, role=excluded.role, status=excluded.status, verify_devices=excluded.verify_devices, totp_secret=excluded.totp_secret, totp_recovery_code=excluded.totp_recovery_code, yubikey_key1=excluded.yubikey_key1, yubikey_key2=excluded.yubikey_key2, yubikey_key3=excluded.yubikey_key3, yubikey_key4=excluded.yubikey_key4, yubikey_key5=excluded.yubikey_key5, yubikey_nfc=excluded.yubikey_nfc, duo_config=excluded.duo_config, api_key=excluded.api_key, updated_at=excluded.updated_at'
+    'kdf_type=excluded.kdf_type, kdf_iterations=excluded.kdf_iterations, kdf_memory=excluded.kdf_memory, kdf_parallelism=excluded.kdf_parallelism, security_stamp=excluded.security_stamp, role=excluded.role, status=excluded.status, verify_devices=excluded.verify_devices, totp_secret=excluded.totp_secret, totp_recovery_code=excluded.totp_recovery_code, yubikey_key1=excluded.yubikey_key1, yubikey_key2=excluded.yubikey_key2, yubikey_key3=excluded.yubikey_key3, yubikey_key4=excluded.yubikey_key4, yubikey_key5=excluded.yubikey_key5, yubikey_nfc=excluded.yubikey_nfc, duo_config=excluded.duo_config, api_key=excluded.api_key, signed_public_key=excluded.signed_public_key, security_state=excluded.security_state, security_version=excluded.security_version, v2_upgrade_token=excluded.v2_upgrade_token, updated_at=excluded.updated_at'
   );
   await safeBind(
     stmt,
@@ -109,6 +122,10 @@ export async function saveUser(db: D1Database, safeBind: SafeBind, user: User): 
     user.yubikeyNfc ? 1 : 0,
     user.duoConfig ?? null,
     user.apiKey,
+    user.signedPublicKey ?? null,
+    user.securityState ?? null,
+    user.securityVersion ?? null,
+    user.v2UpgradeToken ?? null,
     user.createdAt,
     user.updatedAt
   ).run();
@@ -153,8 +170,8 @@ export async function setUserKeyId(db: D1Database, userId: string, userKeyId: st
 export async function createFirstUser(db: D1Database, safeBind: SafeBind, user: User): Promise<boolean> {
   const email = user.email.toLowerCase();
   const stmt = db.prepare(
-    'INSERT INTO users(id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, api_key, created_at, updated_at) ' +
-    'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ' +
+    'INSERT INTO users(id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, api_key, signed_public_key, security_state, security_version, created_at, updated_at) ' +
+    'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ' +
     'WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)'
   );
   const result = await safeBind(
@@ -184,11 +201,25 @@ export async function createFirstUser(db: D1Database, safeBind: SafeBind, user: 
     user.yubikeyKey5,
     user.yubikeyNfc ? 1 : 0,
     user.apiKey,
+    user.signedPublicKey ?? null,
+    user.securityState ?? null,
+    user.securityVersion ?? null,
     user.createdAt,
     user.updatedAt
   ).run();
 
   return (result.meta.changes ?? 0) > 0;
+}
+
+// Like Vaultwarden, the pair is only read while the account is V2 (signed public key, security state
+// and version all set), so a pair saved for an account that is not V2 is ignored.
+export async function saveSignatureKeyPair(db: D1Database, userId: string, pair: UserSignatureKeyPair): Promise<void> {
+  const now = new Date().toISOString();
+  await db.prepare(
+    'INSERT INTO user_signature_key_pairs(user_id, signature_algorithm, signing_key, verifying_key, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?) ' +
+    'ON CONFLICT(user_id) DO UPDATE SET signature_algorithm=excluded.signature_algorithm, signing_key=excluded.signing_key, ' +
+    'verifying_key=excluded.verifying_key, updated_at=excluded.updated_at'
+  ).bind(userId, pair.algorithm, pair.signingKey, pair.verifyingKey, now, now).run();
 }
 
 export async function deleteUserById(db: D1Database, id: string): Promise<boolean> {

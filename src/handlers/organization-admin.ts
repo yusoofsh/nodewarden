@@ -13,10 +13,13 @@ import {
   type OrganizationMember,
   MemberStatus,
   MemberType,
+  MAX_V2_UPGRADES,
+  applyV2Upgrades,
   getMemberById,
   getOrganization,
   getOrganizationApiKey,
   listCollections,
+  listPendingV2Upgrades,
   setMemberResetPasswordKey,
   setOrganizationApiKey,
   setOrganizationKeys,
@@ -242,29 +245,87 @@ export async function handleRecoverAccount(
 }
 
 // GET /api/organizations/{id}/users/keys/pending-v2-upgrades
-// The account recovery keys still to be re-wrapped for members whose account moved to a V2 user
-// key. This server keeps no upgrade tokens, so none ever is.
-export function handlePendingV2Upgrades(): Response {
-  return jsonResponse({ object: 'list', data: [], continuationToken: null });
+// The memberships whose account recovery key an Owner or Admin still has to re-wrap with the
+// member's V2 user key, a page at a time, as Vaultwarden's get_pending_v2_upgrades. An Admin gets
+// every member but the Owners.
+export async function handlePendingV2Upgrades(request: Request, env: Env, caller: OrganizationMember): Promise<Response> {
+  const after = new URL(request.url).searchParams.get('continuationToken')?.toLowerCase() || null;
+  const pending = await listPendingV2Upgrades(env.DB, caller.organizationId, isOwner(caller), after);
+  return jsonResponse({
+    object: 'list',
+    data: pending.map((upgrade) => ({
+      object: 'organizationUserPendingV2Upgrade',
+      organizationUserId: upgrade.memberId,
+      userKeyId: upgrade.userKeyId,
+      accountRecoveryKey: upgrade.accountRecoveryKey,
+      // Null when the stored token can't be read: it holds no usable key, so the admin unenrolls the member.
+      v2UpgradeToken: parseJson(upgrade.v2UpgradeToken),
+    })),
+    continuationToken: pending.length === MAX_V2_UPGRADES ? pending[pending.length - 1].memberId : null,
+  });
 }
 
-const MAX_V2_UPGRADES = 100;
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+// An RSA-OAEP EncString: types 3 and 4 have one base64 part, 5 and 6 two.
+function isRsaEncString(value: string): boolean {
+  const match = /^([3-6])\.(.+)$/.exec(value);
+  if (!match) return false;
+  const parts = match[2].split('|');
+  return parts.length === (Number(match[1]) <= 4 ? 1 : 2) && parts.every((part) => /^[A-Za-z0-9+/]+={0,2}$/.test(part));
+}
 
 // POST /api/organizations/{id}/users/keys/v2-upgrades
-// Checks the request as Vaultwarden does. With nothing pending, every listed member is skipped and
-// stays as it was, as Vaultwarden does for a member that changed since the read.
-export async function handleV2Upgrades(request: Request, env: Env, caller: OrganizationMember): Promise<Response> {
+// Stores the account recovery keys re-wrapped with members' V2 user keys, or unenrolls the members
+// whose entry has no key, as Vaultwarden's post_v2_upgrades. A membership that changed since the read
+// (rotated again, unenrolled, upgraded already, promoted) is skipped and stays pending.
+export async function handleV2Upgrades(request: Request, env: Env, caller: OrganizationMember, actor: EventActor): Promise<Response> {
   const body = await readBody(request);
   const upgrades = Array.isArray(body?.upgrades) ? body.upgrades : [];
   if (!upgrades.length || upgrades.length > MAX_V2_UPGRADES) {
     return errorResponse(`The field Upgrades must contain between 1 and ${MAX_V2_UPGRADES} entries.`, 400);
   }
-  const ids = upgrades.map((u) => (isRecord(u) ? str(u.organizationUserId).toLowerCase() : ''));
-  if (new Set(ids).size !== ids.length) return errorResponse('An organization user can only be upgraded once per request.', 400);
-  for (const id of ids) {
-    const member = id ? await getMemberById(env.DB, caller.organizationId, id) : null;
-    if (!member || (member.type === MemberType.Owner && !isOwner(caller))) return errorResponse('Resource not found.', 404);
+  const parsed = upgrades.map((u) => ({
+    memberId: isRecord(u) ? str(u.organizationUserId).toLowerCase() : '',
+    userKeyId: isRecord(u) ? str(u.userKeyId) : '',
+    key: isRecord(u) ? str(u.accountRecoveryKey) || null : null,
+  }));
+  if (new Set(parsed.map((u) => u.memberId)).size !== parsed.length) {
+    return errorResponse('An organization user can only be upgraded once per request.', 400);
   }
+  // The token the key could be rebuilt from is consumed with the write, so a malformed key is refused.
+  if (parsed.some((u) => u.key !== null && !isRsaEncString(u.key))) {
+    return errorResponse('The field AccountRecoveryKey is not a valid encrypted string.', 400);
+  }
+  const members: OrganizationMember[] = [];
+  for (const upgrade of parsed) {
+    const member = upgrade.memberId ? await getMemberById(env.DB, caller.organizationId, upgrade.memberId) : null;
+    if (!member || (member.type === MemberType.Owner && !isOwner(caller))) return errorResponse('Resource not found.', 404);
+    members.push(member);
+  }
+
+  const applied = await applyV2Upgrades(env.DB, caller.organizationId, isOwner(caller), parsed);
+  const changed = parsed.map((upgrade, index) => ({ upgrade, member: members[index] })).filter((_, index) => applied[index]);
+  if (changed.length) await touchUsers(env.DB, changed.map(({ member }) => member.userId));
+  // A re-wrapped key isn't logged: the member stays enrolled.
+  await logEvents(
+    env,
+    actor,
+    changed
+      .filter(({ upgrade }) => upgrade.key === null)
+      .map(({ member }) => ({
+        type: EventType.OrganizationUserResetPasswordWithdraw,
+        organizationId: caller.organizationId,
+        memberId: member.id,
+        userId: member.userId,
+      }))
+  );
   return ok();
 }
 

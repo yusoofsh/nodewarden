@@ -14,7 +14,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, master_password_hint TEXT, master_password_hash TEXT NOT NULL, ' +
   'key TEXT NOT NULL, private_key TEXT, public_key TEXT, kdf_type INTEGER NOT NULL, ' +
   'kdf_iterations INTEGER NOT NULL, kdf_memory INTEGER, kdf_parallelism INTEGER, ' +
-  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 0, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, duo_config TEXT, api_key TEXT, user_key_id TEXT, avatar_color TEXT, email_2fa TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 0, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, duo_config TEXT, api_key TEXT, user_key_id TEXT, avatar_color TEXT, email_2fa TEXT, signed_public_key TEXT, security_state TEXT, security_version INTEGER, v2_upgrade_token TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'ALTER TABLE users ADD COLUMN master_password_hint TEXT',
   'ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT \'user\'',
   'ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'',
@@ -33,6 +33,16 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   // The address email two-step login codes go to; null when that provider is off.
   'ALTER TABLE users ADD COLUMN email_2fa TEXT',
   'ALTER TABLE users ADD COLUMN duo_config TEXT',
+  // V2 account keys, after Vaultwarden's user_crypto_v2 and add_v2_upgrade_token migrations. All null
+  // for a V1 account. The signature key pair lives in user_signature_key_pairs.
+  'ALTER TABLE users ADD COLUMN signed_public_key TEXT',
+  'ALTER TABLE users ADD COLUMN security_state TEXT',
+  'ALTER TABLE users ADD COLUMN security_version INTEGER',
+  'ALTER TABLE users ADD COLUMN v2_upgrade_token TEXT',
+  'CREATE TABLE IF NOT EXISTS user_signature_key_pairs (' +
+  'user_id TEXT PRIMARY KEY, signature_algorithm INTEGER NOT NULL, signing_key TEXT NOT NULL, verifying_key TEXT NOT NULL, ' +
+  'created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
 
   'CREATE TABLE IF NOT EXISTS domain_settings (' +
   'user_id TEXT PRIMARY KEY, equivalent_domains TEXT NOT NULL DEFAULT \'[]\', custom_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', excluded_global_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', updated_at TEXT NOT NULL, ' +
@@ -180,13 +190,15 @@ const SCHEMA_STATEMENTS: readonly string[] = [
 
   'CREATE TABLE IF NOT EXISTS organization_members (' +
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, akey TEXT NOT NULL DEFAULT \'\', status INTEGER NOT NULL, type INTEGER NOT NULL, ' +
-  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, external_id TEXT, v2_upgrade_token TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
   'UNIQUE (organization_id, user_id), ' +
   'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members(user_id)',
   // The directory id POST /api/public/organization/import matches members by.
   'ALTER TABLE organization_members ADD COLUMN external_id TEXT',
+  // Set by a V1 to V2 upgrade on each membership enrolled in account recovery, until an admin re-wraps its key.
+  'ALTER TABLE organization_members ADD COLUMN v2_upgrade_token TEXT',
 
   'CREATE TABLE IF NOT EXISTS collections (' +
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
