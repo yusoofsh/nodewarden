@@ -60,14 +60,15 @@ async function readRoleAndAccess(
   if (Array.isArray(body.groups) && body.groups.length > 0) return 'Invalid group';
 
   const collectionIds = new Set((await listCollections(db, caller.organizationId)).map((c) => c.id));
-  const access: AccessTemplate[] = [];
+  // Keyed by collection, so a repeated id keeps its last entry instead of failing the insert.
+  const access = new Map<string, AccessTemplate>();
   for (const entry of Array.isArray(body.collections) ? body.collections : []) {
     const collectionId = isRecord(entry) ? str(entry.id).toLowerCase() : '';
     if (!isRecord(entry) || !collectionIds.has(collectionId)) return 'Collection not found in Organization';
-    access.push({ collectionId, readOnly: entry.readOnly === true, hidePasswords: entry.hidePasswords === true, manage: entry.manage === true });
+    access.set(collectionId, { collectionId, readOnly: entry.readOnly === true, hidePasswords: entry.hidePasswords === true, manage: entry.manage === true });
   }
   const accessAll = isFullAccessRole(type);
-  return { type, accessAll, access: accessAll ? [] : access };
+  return { type, accessAll, access: accessAll ? [] : [...access.values()] };
 }
 
 const withMember = (templates: AccessTemplate[], memberId: string): CollectionAccess[] => templates.map((a) => ({ ...a, memberId }));
@@ -178,15 +179,12 @@ export async function handleBulkDeleteMembers(request: Request, env: Env, caller
 }
 
 // POST /api/organizations/{id}/users/{memberId}/accept
-// Not authorized by org-access: the caller is not confirmed yet. Only the invited account can
-// accept, and any other caller gets the same 404 as a missing organization.
-export async function handleAcceptInvite(env: Env, userId: string, organizationId: string, memberId: string): Promise<Response> {
-  const member = await getMemberById(env.DB, organizationId, memberId);
-  if (!member || member.userId !== userId) return errorResponse('Organization not found', 404);
-  if (!(await transitionMember(env.DB, organizationId, memberId, MemberStatus.Invited, MemberStatus.Accepted))) {
+// The router authorizes it with authorizeOwnMembership, since the caller is not confirmed yet.
+export async function handleAcceptInvite(env: Env, member: OrganizationMember): Promise<Response> {
+  if (!(await transitionMember(env.DB, member.organizationId, member.id, MemberStatus.Invited, MemberStatus.Accepted))) {
     return errorResponse('User already accepted the invitation', 400);
   }
-  await touchUsers(env.DB, [userId]);
+  await touchUsers(env.DB, [member.userId]);
   return ok();
 }
 

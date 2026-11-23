@@ -1,5 +1,5 @@
 import { errorResponse } from '../utils/response';
-import { countConfirmedOwners, getMember, MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
+import { countConfirmedOwners, getMember, getMemberById,MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
 
 export type OrgRole = 'member' | 'admin' | 'owner';
 
@@ -16,6 +16,21 @@ export async function getConfirmedMembership(
 export const isOwner = (member: OrganizationMember): boolean => member.type === MemberType.Owner;
 export const isAdminOrOwner = (member: OrganizationMember): boolean =>
   member.type === MemberType.Owner || member.type === MemberType.Admin;
+
+/**
+ * The membership `memberId` when it belongs to the caller, else the response to send. Accepting an
+ * invite is the one organization route a caller who is not confirmed may use, and only for their own
+ * membership: any other caller gets the same 404 as a missing organization.
+ */
+export async function authorizeOwnMembership(
+  db: D1Database,
+  organizationId: string,
+  memberId: string,
+  userId: string
+): Promise<OrganizationMember | Response> {
+  const member = await getMemberById(db, organizationId, memberId);
+  return member && member.userId === userId ? member : errorResponse('Organization not found', 404);
+}
 
 /** Why `caller` may not manage a member of `targetType`, or null when it may. Only owners manage owners. */
 export function roleManageError(caller: OrganizationMember, targetType: number): string | null {

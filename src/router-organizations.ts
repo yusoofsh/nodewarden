@@ -1,5 +1,5 @@
 import type { Env } from './types';
-import { authorizeOrgRequest, type OrgRole } from './services/org-access';
+import { authorizeOrgRequest, authorizeOwnMembership, type OrgRole } from './services/org-access';
 import type { OrganizationMember } from './services/storage-organization-repo';
 import {
   handleCreateCollection,
@@ -85,7 +85,10 @@ export async function handleOrganizationRoute(
   const orgId = match[1].toLowerCase();
   const sub = match[2] || '';
   const accept = sub.match(ACCEPT_PATH);
-  if (accept && method === 'POST') return handleAcceptInvite(env, userId, orgId, accept[1].toLowerCase());
+  if (accept && method === 'POST') {
+    const member = await authorizeOwnMembership(env.DB, orgId, accept[1].toLowerCase(), userId);
+    return member instanceof Response ? member : handleAcceptInvite(env, member);
+  }
   for (const route of ORG_ROUTES) {
     if (route.method !== method) continue;
     const subMatch = sub.match(route.sub);

@@ -484,7 +484,8 @@ test('role and collection changes', async () => {
   await expectError(put('admin', c.adminMemberId, { type: 2 }), 'You cannot change your own role');
 
   // Users get the collections in the request; promoting to admin grants all and drops them.
-  assert.equal((await put('admin', c.memberId, { type: 2, collections: [{ id: c.collection, hidePasswords: true }] })).status, 200);
+  // A repeated collection keeps its last entry.
+  assert.equal((await put('admin', c.memberId, { type: 2, collections: [{ id: c.collection }, { id: c.collection.toUpperCase(), hidePasswords: true }] })).status, 200);
   assert.equal((await call(c.env, 'member', 'GET', '/api/sync')).json.collections[0].hidePasswords, true);
   const detail = await call(c.env, 'admin', 'GET', `${users(c)}/${c.memberId}?includeCollections=true`);
   assert.deepEqual([detail.json.object, detail.json.type, detail.json.collections], [
