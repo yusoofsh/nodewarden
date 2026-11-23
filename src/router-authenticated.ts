@@ -75,6 +75,12 @@ import {
   handleUpdateAttachmentMetadata,
   handleDeleteAttachment,
 } from './handlers/attachments';
+import {
+  handleGetTasks,
+  handleGetUserPublicKey,
+  handleHibpBreach,
+  handleRotateSecurityStamp,
+} from './handlers/account-compat';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
 import { handleAdminRoute } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
@@ -236,6 +242,23 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/two-factor/disable' && (method === 'PUT' || method === 'POST')) {
     return handleDisableTwoFactorProvider(request, env, userId);
+  }
+
+  if (path === '/api/accounts/security-stamp' && method === 'POST') {
+    return handleRotateSecurityStamp(request, env, userId);
+  }
+
+  const userPublicKeyMatch = path.match(/^\/api\/users\/([a-f0-9-]+)\/(?:public-key|keys)$/i);
+  if (userPublicKeyMatch && method === 'GET') {
+    return handleGetUserPublicKey(env, userPublicKeyMatch[1].toLowerCase());
+  }
+
+  if (path === '/api/tasks' && method === 'GET') {
+    return handleGetTasks();
+  }
+
+  if (path === '/api/hibp/breach' && method === 'GET') {
+    return handleHibpBreach(request, env);
   }
 
   if (path === '/api/accounts/revision-date' && method === 'GET') {
