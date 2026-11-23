@@ -3,8 +3,9 @@
 //
 // Account recovery works without mail here. Vaultwarden refuses it on an instance without mail, since
 // it emails the member whose password an admin resets; this server sends no email, so the member
-// learns of it from the event log and the logout. The Account recovery administration policy must be
-// enabled, as in Vaultwarden.
+// only notices by being logged out, and admins see it in the event log. The Account recovery
+// administration policy must be enabled, as in Vaultwarden. Enrolling takes the master password
+// hash only: the one-time code alternative needs mail.
 import type { Env } from '../types';
 import { AuthService } from '../services/auth';
 import { StorageService } from '../services/storage';

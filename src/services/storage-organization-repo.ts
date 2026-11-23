@@ -533,6 +533,7 @@ export async function addCollectionAccess(
 }
 
 export async function deleteCollections(db: D1Database, organizationId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
   await db.batch(ids.map((id) => db.prepare('DELETE FROM collections WHERE id = ? AND organization_id = ?').bind(id, organizationId)));
 }
 
