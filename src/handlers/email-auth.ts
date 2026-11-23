@@ -115,12 +115,15 @@ async function securityAudit(env: Env, request: Request, user: User, action: str
 }
 
 // Signed-in routes: email two-step login setup, email change, verify-email, protected actions.
-export async function handleMailAuthenticatedRoute(request: Request, env: Env, user: User, path: string, method: string): Promise<Response | null> {
+export async function handleMailAuthenticatedRoute(request: Request, env: Env, cachedUser: User, path: string, method: string): Promise<Response | null> {
   const mail = mailConfig(env);
   if (!mail) return null;
   const route = path.replace(/^\/api\//, '/');
   const origin = new URL(request.url).origin;
   const storage = new StorageService(env.DB);
+  // The router's user can be up to 15 seconds old; some handlers below save the whole row.
+  const user = await storage.getUserById(cachedUser.id);
+  if (!user) return errorResponse('User not found', 404);
 
   if (route === '/accounts/verify-email-token') return verifyEmailToken(request, env);
   if (route === '/accounts/verify-email') {
@@ -224,6 +227,7 @@ async function changeEmail(request: Request, env: Env, storage: StorageService, 
     if (message.includes('unique') || message.includes('constraint')) return errorResponse('Email already in use', 400);
     throw error;
   }
+  await storage.updateRevisionDate(user.id);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await safeWriteAuditEvent(env, {

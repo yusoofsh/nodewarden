@@ -288,6 +288,18 @@ test('a recipient gets at most five messages per ten minutes', async () => {
   assert.equal(sent.length, 5);
 });
 
+test('a spent budget for one purpose does not block login codes', async () => {
+  const c = await setup();
+  await enableEmailTwoFactor(c, 'member@example.test');
+  for (let i = 0; i < 6; i++) await publicCall(c, '/api/accounts/delete-recover', { email: 'member@example.test' });
+  assert.equal((await publicCall(c, '/api/two-factor/send-email-login', { email: 'member@example.test', masterPasswordHash: PASSWORD })).status, 200);
+});
+
+test('the generic disable route still refuses type 1 when email two-step login is off', async () => {
+  const c = await setup();
+  assert.equal((await call(c, 'member', 'POST', '/api/two-factor/disable', { type: 1, masterPasswordHash: PASSWORD })).status, 400);
+});
+
 test('registration by email stays closed once an account exists, and works for the first one', async () => {
   const c = await setup();
   const closed = await publicCall(c, '/identity/accounts/register/send-verification-email', { email: 'fresh@example.test', name: 'Fresh' });

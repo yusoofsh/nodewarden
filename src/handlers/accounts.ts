@@ -1373,8 +1373,10 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
   const typeRaw = body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
   const type = typeof typeRaw === 'number' ? typeRaw : Number.parseInt(String(typeRaw), 10);
-  // Email is accepted with mail off too, so an account can always turn it off.
-  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_EMAIL, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
+  // Email is accepted, with mail off too, whenever it is on, so an account can always turn it off.
+  const supported = [TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN];
+  if (user.emailTwoFactor) supported.push(TWO_FACTOR_PROVIDER_EMAIL);
+  if (!supported.includes(type)) {
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 

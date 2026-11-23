@@ -11,7 +11,8 @@ export type EmailCodePurpose = 'login' | 'setup' | 'email-change' | 'otp' | 'ver
 export const EMAIL_CODE_TTL_MS = 10 * 60 * 1000;
 export const EMAIL_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
-// Per recipient address, so a public route cannot flood one inbox.
+// Per recipient address and purpose, so a public route cannot flood one inbox, and spending
+// one purpose's budget (delete-recover is public) cannot block another (login codes).
 const RECIPIENT_BUDGET = 5;
 const RECIPIENT_WINDOW_SECONDS = 10 * 60;
 
@@ -46,7 +47,7 @@ export async function issueEmailCode(
   ttlMs: number
 ): Promise<boolean> {
   const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
-    `mail:${email.toLowerCase()}`,
+    `mail:${purpose}:${email.toLowerCase()}`,
     RECIPIENT_BUDGET,
     RECIPIENT_WINDOW_SECONDS
   );

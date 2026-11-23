@@ -57,7 +57,7 @@ function escapeHtml(value: string): string {
 
 function textToHtml(text: string): string {
   const body = escapeHtml(text)
-    .replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}">${url}</a>`)
+    .replace(/https?:\/\/[^\s<]*[^\s<.,]/g, (url) => `<a href="${url}">${url}</a>`)
     .replace(/\n/g, '<br>\n');
   return `<!doctype html><html><body><p>${body}</p></body></html>`;
 }
