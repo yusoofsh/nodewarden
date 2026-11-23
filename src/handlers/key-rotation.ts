@@ -7,7 +7,7 @@ import { listAccountRecoveryMemberships } from '../services/storage-organization
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomingAttachmentMetadata } from './ciphers';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { listMembershipsByUser, MemberStatus } from '../services/storage-organization-repo';
+import { listMembershipsByUser, MemberStatus, REVOKED_ENROLLABLE_STATUSES } from '../services/storage-organization-repo';
 import { generateUUID } from '../utils/uuid';
 
 type Json = Record<string, unknown>;
@@ -281,7 +281,8 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
 export async function handleGetKeyRotationData(env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const [memberships, emergencyAccess] = await Promise.all([
-    listMembershipsByUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed]),
+    // Revoked rows keep their earlier status minus an offset; they stay enrolled, so the rotation below requires their keys too.
+    listMembershipsByUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed, ...REVOKED_ENROLLABLE_STATUSES]),
     listKeyedGrantorEmergencyAccess(env.DB, userId),
   ]);
 

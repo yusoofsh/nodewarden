@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import type { AccountPasskeyCredential, Env, User } from '../src/types';
-import { StorageService } from '../src/services/storage';
+import { StorageService, STORAGE_SCHEMA_VERSION } from '../src/services/storage';
 import { ensureStorageSchema } from '../src/services/storage-schema';
 import { createPasswordVerifier } from '../src/services/password-verifier';
 import { handleAuthenticatedRoute } from '../src/router-authenticated';
@@ -185,6 +185,12 @@ test('key rotation data lists keyed emergency contacts and recovery-enrolled org
   await c.db.prepare("UPDATE organizations SET public_key = 'org-pub' WHERE id IN (?, ?)").bind(orgId, second).run();
   await c.db.prepare("UPDATE organization_members SET reset_password_key = '4.reset' WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
 
+  // A revoked member that was enrolled stays enrolled: the rotation requires its key, so the data must list it.
+  await c.db.prepare("UPDATE organization_members SET status = status - 128 WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
+  const revoked = (await call(c, 'owner', 'GET', '/api/accounts/key-management/key-rotation-data')).json;
+  assert.equal(revoked.organizationPasswordResetKeyData.length, 1);
+  await c.db.prepare("UPDATE organization_members SET status = status + 128 WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
+
   const data = (await call(c, 'owner', 'GET', '/api/accounts/key-management/key-rotation-data')).json;
   assert.deepEqual(data.organizationPasswordResetKeyData, [
     { organizationId: orgId, organizationName: 'Org', organizationPublicKey: 'org-pub', object: 'organizationPasswordResetKeyData' },
@@ -359,7 +365,7 @@ test('upgrading a 2026-11-23-events database adds users.avatar_color and keeps u
     await new StorageService(db).initializeDatabase();
   }
   assert.ok((await columns()).includes('avatar_color'));
-  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-users-avatar-color');
+  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, STORAGE_SCHEMA_VERSION);
   const storage = new StorageService(db);
   const user = (await storage.getUserById(ID.owner))!;
   assert.deepEqual([user.name, user.avatarColor], ['kept', null]);

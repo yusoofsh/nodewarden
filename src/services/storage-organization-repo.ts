@@ -7,6 +7,8 @@ export const MemberStatus = { Revoked: -1, Invited: 0, Accepted: 1, Confirmed: 2
 // that status: -128 invited, -127 accepted, -126 confirmed. Every check that grants access compares
 // with a positive status, so a revoked row grants nothing.
 const REVOKED_OFFSET = 128;
+/** The stored statuses of revoked members that had been accepted or confirmed. */
+export const REVOKED_ENROLLABLE_STATUSES = [MemberStatus.Accepted - REVOKED_OFFSET, MemberStatus.Confirmed - REVOKED_OFFSET];
 export const isRevoked = (status: number): boolean => status < MemberStatus.Invited;
 /** The status clients see: every revoked status reads as Revoked. */
 export const clientStatus = (status: number): number => (isRevoked(status) ? MemberStatus.Revoked : status);
