@@ -21,29 +21,27 @@ its own `/api/admin/*` and web vault.
 
 | Vaultwarden file | Handled | Stub | Refused (405/501) | Unmatched |
 |---|---|---|---|---|
-| core/accounts.rs | 35 | 0 | 8 | 0 |
+| core/accounts.rs | 41 | 0 | 2 | 0 |
 | core/ciphers.rs | 59 | 0 | 0 | 0 |
 | core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 4 | 0 | 0 | 0 |
 | core/folders.rs | 7 | 0 | 0 | 0 |
 | core/mod.rs | 9 | 0 | 0 | 0 |
 | core/organizations.rs | 69 | 0 | 0 | 0 |
-| core/public.rs | 0 | 0 | 0 | 1 |
+| core/public.rs | 1 | 0 | 0 | 0 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
-| core/two_factor/duo.rs | 0 | 0 | 0 | 4 |
-| core/two_factor/email.rs | 0 | 0 | 5 | 0 |
+| core/two_factor/duo.rs | 4 | 0 | 0 | 0 |
+| core/two_factor/email.rs | 5 | 0 | 0 | 0 |
 | core/two_factor/mod.rs | 3 | 0 | 0 | 0 |
-| core/two_factor/protected_actions.rs | 0 | 0 | 2 | 0 |
+| core/two_factor/protected_actions.rs | 2 | 0 | 0 | 0 |
 | core/two_factor/webauthn.rs | 6 | 0 | 0 | 0 |
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
-| identity.rs | 7 | 0 | 3 | 0 |
+| identity.rs | 10 | 0 | 0 | 0 |
 
-Total 260: handled 237, stub 0, refused 18, unmatched 5
+Total 260: handled 258, stub 0, refused 2, unmatched 0
 
-Measured with `--sso`, which configures an OpenID provider. SSO is off unless an operator sets
-`SSO_ENABLED`. While it is off, its four routes fall through as before, so the same run without
-`--sso` reports handled 232 and unmatched 10.
+Measured with `--mail` and `--sso`, which configure an email provider and an OpenID provider. Both are off unless an operator sets them (`MAIL_PROVIDER` or `SSO_ENABLED`). Without `--mail` the email-backed routes answer 501 and the run reports handled 242 and refused 18. Without either flag it reports handled 237, refused 18 and unmatched 5, because the four SSO routes fall through. Duo needs no flag: its routes answer for every user, and Duo only signs in once a user saves a configuration.
 
 ## Not in the Vaultwarden route list
 
@@ -52,55 +50,9 @@ Measured with `--sso`, which configures an OpenID provider. SSO is off unless an
 
 ## Unhandled and refused routes
 
-<details><summary>core/accounts.rs: refused (8)</summary>
+<details><summary>core/accounts.rs: refused (2)</summary>
 
-- `POST /api/accounts/delete-recover-token` (answers 501)
-- `POST /api/accounts/delete-recover` (answers 501)
-- `POST /api/accounts/email-token` (answers 501)
-- `POST /api/accounts/email` (answers 501)
-- `POST /api/accounts/key-management/rotate-user-keys` (answers 501)
-- `POST /api/accounts/set-password` (answers 501)
-- `POST /api/accounts/verify-email-token` (answers 501)
-- `POST /api/accounts/verify-email` (answers 501)
-
-</details>
-
-<details><summary>core/public.rs: unmatched (1)</summary>
-
-- `POST /api/public/organization/import`
-
-</details>
-
-<details><summary>core/two_factor/duo.rs: unmatched (4)</summary>
-
-- `DELETE /api/two-factor/duo`
-- `POST /api/two-factor/duo`
-- `POST /api/two-factor/get-duo`
-- `PUT /api/two-factor/duo`
-
-</details>
-
-<details><summary>core/two_factor/email.rs: refused (5)</summary>
-
-- `DELETE /api/two-factor/email` (answers 501)
-- `POST /api/two-factor/get-email` (answers 501)
-- `POST /api/two-factor/send-email-login` (answers 501)
-- `POST /api/two-factor/send-email` (answers 501)
-- `PUT /api/two-factor/email` (answers 501)
-
-</details>
-
-<details><summary>core/two_factor/protected_actions.rs: refused (2)</summary>
-
-- `POST /api/accounts/request-otp` (answers 501)
-- `POST /api/accounts/verify-otp` (answers 501)
-
-</details>
-
-<details><summary>identity.rs: refused (3)</summary>
-
-- `POST /identity/accounts/register/finish` (answers 501)
-- `POST /identity/accounts/register/send-verification-email` (answers 501)
-- `POST /identity/accounts/register/verification-email-clicked` (answers 501)
+- `POST /api/accounts/key-management/rotate-user-keys` (answers 501, V2 key rotation is not implemented; V1 rotation works)
+- `POST /api/accounts/set-password` (answers 501, SSO account creation is not supported)
 
 </details>
