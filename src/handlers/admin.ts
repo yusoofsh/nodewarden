@@ -2,7 +2,7 @@ import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from '../services/blob-store';
+import { purgeUser } from '../services/user-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 
 function isAdmin(user: User): boolean {
@@ -413,31 +413,7 @@ export async function handleAdminDeleteUser(
     return errorResponse('User not found', 404);
   }
 
-  // Clean up R2 files before DB cascade deletes the metadata rows.
-  // 1. Attachment files (keyed by cipherId/attachmentId)
-  const attachmentMap = await storage.getAttachmentsByUserId(target.id);
-  for (const [cipherId, attachments] of attachmentMap) {
-    for (const att of attachments) {
-      await deleteBlobObject(env, getAttachmentObjectKey(cipherId, att.id));
-    }
-  }
-  // 2. Send files (keyed by sends/sendId/fileId)
-  const sends = await storage.getAllSends(target.id);
-  for (const send of sends) {
-    if (send.type === 1) { // SendType.File
-      try {
-        const parsed = JSON.parse(send.data) as Record<string, unknown>;
-        const fileId = typeof parsed.id === 'string' ? parsed.id : null;
-        if (fileId) {
-          await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
-        }
-      } catch { /* non-file send or bad data, skip */ }
-    }
-  }
-
-  await storage.deleteRefreshTokensByUserId(target.id);
-  await storage.deleteUserById(target.id);
-  AuthService.invalidateUserCache(target.id);
+  await purgeUser(env, storage, target);
   await writeAuditLog(storage, actorUser.id, 'admin.user.delete', 'user', target.id, {
     targetEmail: target.email,
   }, request);

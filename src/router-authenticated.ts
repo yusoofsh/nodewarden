@@ -76,6 +76,7 @@ import {
   handleDeleteAttachment,
 } from './handlers/attachments';
 import {
+  handleDeleteOwnAccount,
   handleGetTasks,
   handleGetUserPublicKey,
   handleHibpBreach,
@@ -115,8 +116,6 @@ export async function handleAuthenticatedRoute(
   if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
     const blockedAccountPaths = new Set([
       '/api/accounts/set-password',
-      '/api/accounts/delete',
-      '/api/accounts/delete-account',
       '/api/accounts/delete-vault',
     ]);
     if (blockedAccountPaths.has(path)) {
@@ -242,6 +241,13 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/two-factor/disable' && (method === 'PUT' || method === 'POST')) {
     return handleDisableTwoFactorProvider(request, env, userId);
+  }
+
+  if (
+    ((path === '/api/accounts/delete' || path === '/api/accounts/delete-account') && method === 'POST') ||
+    (path === '/api/accounts' && method === 'DELETE')
+  ) {
+    return handleDeleteOwnAccount(request, env, userId);
   }
 
   if (path === '/api/accounts/security-stamp' && method === 'POST') {
