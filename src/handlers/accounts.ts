@@ -495,18 +495,17 @@ export async function handleGetProfile(request: Request, env: Env, userId: strin
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-  const memberships = await listProfileMemberships(env.DB, user.id);
-  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey, memberships }));
+  return profileResponse(env, storage, user);
 }
 
-// PUT /api/accounts/profile
+// PUT and POST /api/accounts/profile
 export async function handleUpdateProfile(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: {
+    name?: unknown;
     masterPasswordHint?: string | null;
   };
   try {
@@ -514,15 +513,25 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
+  if (!body || typeof body !== 'object') return errorResponse('Invalid JSON', 400);
 
-  const masterPasswordHint = normalizeMasterPasswordHint(body.masterPasswordHint);
-  if (masterPasswordHint && masterPasswordHint.length > 120) {
-    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
+  // Official clients send only the name, this web vault only the hint: change what is sent.
+  if ('name' in body) {
+    if (typeof body.name !== 'string') return errorResponse('The Name field is required.', 400);
+    if (body.name.length > 50) return errorResponse('The field Name must be a string with a maximum length of 50.', 400);
+    user.name = body.name;
   }
-
-  user.masterPasswordHint = masterPasswordHint;
+  if ('masterPasswordHint' in body) {
+    const masterPasswordHint = normalizeMasterPasswordHint(body.masterPasswordHint);
+    if (masterPasswordHint && masterPasswordHint.length > 120) {
+      return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
+    }
+    user.masterPasswordHint = masterPasswordHint;
+  }
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
+  // /api/sync is cached per revision date, and it carries the profile.
+  await storage.updateRevisionDate(user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'account.profile.update',
@@ -531,14 +540,43 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
     targetType: 'user',
     targetId: user.id,
     metadata: {
-      updatedMasterPasswordHint: true,
+      updatedName: 'name' in body,
+      updatedMasterPasswordHint: 'masterPasswordHint' in body,
       ...auditRequestMetadata(request),
     },
   });
 
+  return profileResponse(env, storage, user);
+}
+
+async function profileResponse(env: Env, storage: StorageService, user: User): Promise<Response> {
   const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
   const memberships = await listProfileMemberships(env.DB, user.id);
   return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey, memberships }));
+}
+
+// PUT /api/accounts/avatar
+// Like Vaultwarden: a "#rrggbb" color, or null to go back to the client default.
+export async function handlePutAvatar(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: { avatarColor?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const avatarColor = body?.avatarColor ?? null;
+  if (avatarColor !== null && (typeof avatarColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(avatarColor))) {
+    return errorResponse('The field AvatarColor must be a HTML/Hex color code with a length of 7 characters', 400);
+  }
+
+  await storage.setAvatarColor(user.id, avatarColor);
+  await storage.updateRevisionDate(user.id);
+  user.avatarColor = avatarColor;
+  return profileResponse(env, storage, user);
 }
 
 // PUT/POST /api/accounts/verify-devices
@@ -953,6 +991,9 @@ function deviceVerificationSettingsResponse(_user: User): Record<string, unknown
     enabled: false,
     VerifyDevices: false,
     verifyDevices: false,
+    // The names Vaultwarden and current clients read.
+    isDeviceVerificationSectionEnabled: false,
+    unknownDeviceVerificationEnabled: false,
     Object: 'deviceVerificationSettings',
     object: 'deviceVerificationSettings',
   };

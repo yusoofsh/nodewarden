@@ -456,6 +456,11 @@ export async function handlePublicRoute(
     '/accounts/verify-email-token',
     '/api/two-factor/send-email-login',
     '/two-factor/send-email-login',
+    // Deleting an account without logging in mails a token to the owner.
+    '/api/accounts/delete-recover',
+    '/accounts/delete-recover',
+    '/api/accounts/delete-recover-token',
+    '/accounts/delete-recover-token',
   ]);
   if (publicMailBackedPaths.has(path) && method === 'POST') {
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
@@ -482,7 +487,7 @@ export async function handlePublicRoute(
     return jsonResponse(buildConfigResponse(origin), 200, { 'Cache-Control': 'no-store' });
   }
 
-  if ((path === '/alive' || path === '/api/alive') && method === 'GET') {
+  if ((path === '/alive' || path === '/api/alive' || path === '/api/now') && method === 'GET') {
     return jsonResponse(new Date().toISOString());
   }
 

@@ -11,8 +11,10 @@ import {
   type OrganizationMember,
   MemberStatus,
   MemberType,
+  addCollectionAccess,
   createOrganization,
   deleteCollection,
+  deleteCollections,
   deleteMember,
   deleteOrganization,
   getCollection,
@@ -235,19 +237,17 @@ export async function handleGetOrganizationCollections(env: Env, organizationId:
   return list(collections.map(collectionJson));
 }
 
-// GET /api/organizations/{id}/collections/details
-export async function handleGetOrganizationCollectionDetails(
-  env: Env,
-  viewer: OrganizationMember,
-  organizationId: string
-): Promise<Response> {
-  const [collections, access, members, groupAccess, groupMembers] = await Promise.all([
+// GET /api/organizations/{id}/collections/details, and with a collection id its /details
+// The collections with their member and group access, as the viewer sees them.
+async function collectionAccessDetails(env: Env, viewer: OrganizationMember, organizationId: string, collectionId?: string) {
+  const [allCollections, access, members, groupAccess, groupMembers] = await Promise.all([
     listCollections(env.DB, organizationId),
     listCollectionAccess(env.DB, organizationId),
     listMembersWithUsers(env.DB, organizationId),
     listGroupAccess(env.DB, organizationId),
     listGroupMembers(env.DB, organizationId),
   ]);
+  const collections = collectionId ? allCollections.filter((c) => c.id === collectionId) : allCollections;
   const viewerGroups = new Set(groupMembers.filter((g) => g.memberId === viewer.id).map((g) => g.groupId));
   const typeByMember = new Map(members.map((m) => [m.id, m.type]));
   const manageAll = members
@@ -255,7 +255,7 @@ export async function handleGetOrganizationCollectionDetails(
     .map((m) => ({ id: m.id, readOnly: false, hidePasswords: false, manage: true }));
   const fullAccess = viewer.accessAll || isAdminOrOwner(viewer);
 
-  const data = collections.map((collection) => {
+  return collections.map((collection) => {
     const rows = access.filter((a) => a.collectionId === collection.id);
     const own = rows.find((a) => a.memberId === viewer.id) ?? null;
     const groups = groupAccess.filter((a) => a.collectionId === collection.id);
@@ -268,24 +268,40 @@ export async function handleGetOrganizationCollectionDetails(
       unmanaged: false,
     };
   });
-  return list(data);
 }
 
-// Reads a collection request body. Member and group ids must belong to this organization; members
-// with access to every collection need no row, as in Vaultwarden.
-async function readCollectionBody(
-  request: Request,
-  db: D1Database,
+export async function handleGetOrganizationCollectionDetails(
+  env: Env,
+  viewer: OrganizationMember,
   organizationId: string
-): Promise<
-  | { name: string; externalId: string | null; access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] }
-  | Response
-> {
-  const body = await readBody(request);
-  if (!body) return errorResponse('Invalid JSON', 400);
-  const name = str(body.name);
-  if (!name) return errorResponse('name is required', 400);
+): Promise<Response> {
+  return list(await collectionAccessDetails(env, viewer, organizationId));
+}
 
+// GET /api/organizations/{id}/collections/{collectionId}/details
+export async function handleGetCollectionDetails(
+  env: Env,
+  viewer: OrganizationMember,
+  organizationId: string,
+  collectionId: string
+): Promise<Response> {
+  const [details] = await collectionAccessDetails(env, viewer, organizationId, collectionId);
+  return details ? jsonResponse(details) : errorResponse('Collection not found', 400);
+}
+
+// GET /api/organizations/{id}/collections/{collectionId}/users
+// The members assigned to the collection directly. As in Vaultwarden, a bare array.
+export async function handleGetCollectionUsers(env: Env, organizationId: string, collectionId: string): Promise<Response> {
+  if (!(await getCollection(env.DB, organizationId, collectionId))) return errorResponse('Collection not found in Organization', 400);
+  const rows = (await listCollectionAccess(env.DB, organizationId)).filter((a) => a.collectionId === collectionId);
+  return jsonResponse(rows.map((a) => ({ id: a.memberId, readOnly: a.readOnly, hidePasswords: a.hidePasswords, manage: a.manage })));
+}
+
+type AccessLists = { access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] };
+
+// Reads the `users` and `groups` of a collection request body. Member and group ids must belong to
+// this organization; members with access to every collection need no row, as in Vaultwarden.
+async function readAccessLists(body: Json, db: D1Database, organizationId: string): Promise<AccessLists | Response> {
   const groupIds = new Set((await listGroups(db, organizationId)).map((g) => g.id));
   // Keyed by group, so a repeated id keeps its last entry instead of failing the insert.
   const groupAccess = new Map<string, Omit<GroupAccess, 'collectionId'>>();
@@ -296,14 +312,29 @@ async function readCollectionBody(
   }
 
   const members = new Map((await listMembersWithUsers(db, organizationId)).map((m) => [m.id, m]));
-  const access: Omit<CollectionAccess, 'collectionId'>[] = [];
+  const access = new Map<string, Omit<CollectionAccess, 'collectionId'>>();
   for (const entry of Array.isArray(body.users) ? body.users : []) {
     const member = isRecord(entry) ? members.get(str(entry.id).toLowerCase()) : undefined;
     if (!member || !isRecord(entry)) return errorResponse('Invalid member', 400);
     if (member.accessAll) continue;
-    access.push({ memberId: member.id, ...accessFlags(entry) });
+    access.set(member.id, { memberId: member.id, ...accessFlags(entry) });
   }
-  return { name, externalId: str(body.externalId) || null, access, groupAccess: [...groupAccess.values()] };
+  return { access: [...access.values()], groupAccess: [...groupAccess.values()] };
+}
+
+// Reads a collection request body.
+async function readCollectionBody(
+  request: Request,
+  db: D1Database,
+  organizationId: string
+): Promise<({ name: string; externalId: string | null } & AccessLists) | Response> {
+  const body = await readBody(request);
+  if (!body) return errorResponse('Invalid JSON', 400);
+  const name = str(body.name);
+  if (!name) return errorResponse('name is required', 400);
+  const lists = await readAccessLists(body, db, organizationId);
+  if (lists instanceof Response) return lists;
+  return { name, externalId: str(body.externalId) || null, ...lists };
 }
 
 export const accessFlags = (entry: Json) => ({
@@ -316,7 +347,7 @@ async function writeCollection(
   env: Env,
   viewer: OrganizationMember,
   collection: Collection,
-  parsed: { access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] },
+  parsed: AccessLists,
   isNew: boolean,
   actor: EventActor
 ): Promise<Response> {
@@ -370,5 +401,39 @@ export async function handleDeleteCollection(env: Env, organizationId: string, c
   await deleteCollection(env.DB, organizationId, collectionId);
   await touchOrganization(env.DB, organizationId);
   await logEvents(env, actor, [{ type: EventType.CollectionDeleted, organizationId, collectionId }]);
+  return new Response(null, { status: 200 });
+}
+
+const collectionIdList = (value: unknown): string[] => (Array.isArray(value) ? value.map((id) => str(id).toLowerCase()) : []);
+
+// POST /api/organizations/{id}/collections/bulk-access
+// Adds the listed members and groups to every listed collection, keeping their other assignments.
+// As in Bitwarden, missing or repeated collections are a 404, checked before the members and groups.
+export async function handleBulkCollectionAccess(request: Request, env: Env, organizationId: string, actor: EventActor): Promise<Response> {
+  const body = await readBody(request);
+  if (!body) return errorResponse('Invalid JSON', 400);
+  const collectionIds = collectionIdList(body.collectionIds);
+  const known = new Set((await listCollections(env.DB, organizationId)).map((c) => c.id));
+  if (!collectionIds.length || new Set(collectionIds).size !== collectionIds.length || collectionIds.some((id) => !known.has(id))) {
+    return errorResponse('One or more collections not found.', 404);
+  }
+  const lists = await readAccessLists(body, env.DB, organizationId);
+  if (lists instanceof Response) return lists;
+
+  await addCollectionAccess(env.DB, organizationId, collectionIds, lists.access, lists.groupAccess);
+  await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, collectionIds.map((collectionId) => ({ type: EventType.CollectionUpdated, organizationId, collectionId })));
+  return new Response(null, { status: 200 });
+}
+
+// DELETE /api/organizations/{id}/collections
+// Every id must be a collection of this organization, or nothing is deleted.
+export async function handleBulkDeleteCollections(request: Request, env: Env, organizationId: string, actor: EventActor): Promise<Response> {
+  const ids = [...new Set(collectionIdList((await readBody(request))?.ids))];
+  const known = new Set((await listCollections(env.DB, organizationId)).map((c) => c.id));
+  if (ids.some((id) => !known.has(id))) return errorResponse('Collection not found', 400);
+  await deleteCollections(env.DB, organizationId, ids);
+  await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, ids.map((collectionId) => ({ type: EventType.CollectionDeleted, organizationId, collectionId })));
   return new Response(null, { status: 200 });
 }

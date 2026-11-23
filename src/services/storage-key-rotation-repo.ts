@@ -13,6 +13,8 @@ export interface KeyRotationPlan {
   sends: Array<{ id: string; key: string }>;
   // The user key wrapped for each confirmed emergency contact.
   emergencyAccess: Array<{ id: string; keyEncrypted: string }>;
+  // The user key wrapped for each organization the user enrolled in account recovery, by membership id.
+  accountRecovery: Array<{ id: string; key: string }>;
   // Copies of the user key wrapped for a passkey or a trusted device. Rows that are
   // not listed hold the old user key, so their wrapped keys are cleared.
   passkeys: Array<{ id: string; encryptedUserKey: string; encryptedPublicKey: string | null }>;
@@ -106,6 +108,13 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
           'WHERE emergency_access.id = j.id AND emergency_access.grantor_id = ?' + guard
         )
         .bind(plan.now, chunk, user.id, ...guardArgs)
+    );
+  }
+  for (const membership of plan.accountRecovery) {
+    statements.push(
+      db
+        .prepare('UPDATE organization_members SET reset_password_key = ?, updated_at = ? WHERE id = ? AND user_id = ?' + guard)
+        .bind(membership.key, plan.now, membership.id, user.id, ...guardArgs)
     );
   }
   for (const chunk of chunkJson(plan.ciphers.map(cipherRowValues))) {

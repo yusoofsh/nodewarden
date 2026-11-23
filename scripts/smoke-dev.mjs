@@ -7,11 +7,13 @@ const enc = (label) => `2.${btoa('iv-' + label)}|${btoa('ct-' + label)}|${btoa('
 const run = Date.now().toString(36);
 let failed = 0;
 
-async function call(method, path, { token, body, form } = {}) {
+async function call(method, path, { token, body, form, multipart } = {}) {
   const headers = { 'CF-Connecting-IP': '198.51.100.7', Origin: base };
   if (token) headers.Authorization = `Bearer ${token}`;
   let payload;
-  if (form) {
+  if (multipart) {
+    payload = multipart;
+  } else if (form) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
     payload = new URLSearchParams(form).toString();
   } else if (body !== undefined) {
@@ -264,13 +266,68 @@ const ownEvent = (orgEventList.json?.data || []).find((e) => e.type === 1400);
 check('an event names the acting user, device type and IP', ownEvent?.actingUserId && ownEvent?.deviceType === 9 && ownEvent?.ipAddress === '198.51.100.7', JSON.stringify(ownEvent));
 check('a member cannot read the event log', (await call('GET', `${teamPath}/events${eventRange}`, { token: secondToken })).status === 400);
 check('the member event log lists their invite', (await call('GET', `${teamPath}/users/${invitedRow?.id}/events${eventRange}`, { token })).json?.data?.some((e) => e.type === 1500));
+// Organization admin routes: keys, revoke and restore, collection access, import, export, bulk
+// collections, the API key, account recovery and the static billing routes.
+check('GET /api/plans', (await call('GET', '/api/plans', { token })).json?.data?.length === 2);
+check('billing warnings', (await call('GET', `${teamPath}/billing/vnext/warnings`, { token: secondToken })).json?.freeTrial === null);
+check('self-host billing metadata', (await call('GET', `${teamPath}/billing/vnext/self-host/metadata`, { token })).json?.organizationOccupiedSeats === 0);
+check('no pending v2 upgrades', (await call('GET', `${teamPath}/users/keys/pending-v2-upgrades`, { token })).json?.data?.length === 0);
+const teamKeys = await call('POST', `${teamPath}/keys`, { token, body: { encryptedPrivateKey: enc('teampriv'), publicKey: 'dGVhbS1wdWI=' } });
+check('set the organization keys once', teamKeys.status === 200 && (await call('POST', `${teamPath}/keys`, { token, body: { encryptedPrivateKey: enc('x'), publicKey: 'eA==' } })).status === 400, teamKeys.text);
+check('read the organization private key', (await call('GET', `${teamPath}/private-key`, { token })).json?.privateKey === enc('teampriv'));
+check('revoke the member', (await call('PUT', `${teamPath}/users/${invitedRow?.id}/revoke`, { token })).status === 200);
+const revokedSync = await call('GET', '/api/sync', { token: secondToken });
+check('a revoked member loses the organization', !revokedSync.json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id), revokedSync.text.slice(0, 300));
+const mini = await call('GET', `${teamPath}/users/mini-details`, { token });
+check('mini details show the member revoked', mini.json?.data?.find((m) => m.id === invitedRow?.id)?.status === -1, mini.text);
+const restoredMember = await call('PUT', `${teamPath}/users/restore`, { token, body: { ids: [invitedRow?.id] } });
+check('restore the member', restoredMember.json?.data?.[0]?.error === '', restoredMember.text);
+check('the restored member is confirmed again', (await call('GET', '/api/sync', { token: secondToken })).json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id && o.status === 2));
+const bulkAccess = await call('POST', `${teamPath}/collections/bulk-access`, {
+  token, body: { collectionIds: [teamCollectionId], users: [{ id: invitedRow?.id, readOnly: false, hidePasswords: false, manage: true }], groups: [] },
+});
+check('bulk collection access', bulkAccess.status === 200, `${bulkAccess.status} ${bulkAccess.text}`);
+const collectionUsers = await call('GET', `${teamPath}/collections/${teamCollectionId}/users`, { token });
+check('collection users', collectionUsers.json?.[0]?.id === invitedRow?.id && collectionUsers.json[0].manage === true, collectionUsers.text);
+check('collection details by id', (await call('GET', `${teamPath}/collections/${teamCollectionId}/details`, { token })).json?.object === 'collectionAccessDetails');
+const imported = await call('POST', `/api/ciphers/import-organization?organizationId=${teamOrg.json?.id}`, {
+  token: secondToken,
+  body: { ciphers: [{ type: 2, name: enc('imported'), secureNote: { type: 0 } }], collections: [{ id: teamCollectionId, name: enc('default') }], collectionRelationships: [{ key: 0, value: 0 }] },
+});
+check('a collection manager imports into it', imported.status === 200, `${imported.status} ${imported.text}`);
+const assigned = await call('GET', `/api/ciphers/organization-details/assigned?organizationId=${teamOrg.json?.id}`, { token: secondToken });
+const importedId = assigned.json?.data?.[0]?.id;
+check('the member lists the assigned cipher', assigned.json?.data?.length === 1, assigned.text.slice(0, 300));
+const extra = await call('POST', `${teamPath}/collections`, { token, body: { name: enc('extra'), users: [], groups: [] } });
+check('bulk add a collection', (await call('POST', '/api/ciphers/bulk-collections', { token, body: { organizationId: teamOrg.json?.id, cipherIds: [importedId], collectionIds: [extra.json?.id], removeCollections: false } })).status === 200);
+const exported = await call('GET', `${teamPath}/export`, { token });
+check('the export lists the collections and the cipher in both', exported.json?.collections?.length === 2 && exported.json?.ciphers?.[0]?.collectionIds?.length === 2, exported.text.slice(0, 300));
+check('delete collections in bulk', (await call('DELETE', `${teamPath}/collections`, { token, body: { ids: [extra.json?.id] } })).status === 200);
+const apiKey = await call('POST', `${teamPath}/api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
+check('organization API key', apiKey.json?.object === 'apiKey' && apiKey.json?.apiKey?.length === 30, apiKey.text);
+check('rotate the organization API key', (await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } })).json?.apiKey !== apiKey.json?.apiKey);
+check('enable account recovery', (await call('PUT', `${teamPath}/policies/8`, { token, body: { policy: { enabled: true, data: { autoEnrollEnabled: false } } } })).status === 200);
+check('auto-enroll status', (await call('GET', `${teamPath}/auto-enroll-status`, { token: secondToken })).json?.resetPasswordEnabled === false);
+const enrolled = await call('PUT', `${teamPath}/users/${(await call('GET', '/api/accounts/profile', { token: secondToken })).json?.id}/reset-password-enrollment`, {
+  token: secondToken, body: { resetPasswordKey: '4.cmVjb3Zlcnk=', masterPasswordHash: 'hash-x' },
+});
+check('the member enrolls in account recovery', enrolled.status === 200, `${enrolled.status} ${enrolled.text}`);
+const resetDetails = await call('GET', `${teamPath}/users/${invitedRow?.id}/reset-password-details`, { token });
+check('reset password details', resetDetails.json?.resetPasswordKey === '4.cmVjb3Zlcnk=' && resetDetails.json?.encryptedPrivateKey === enc('teampriv'), resetDetails.text);
+const recovered = await call('PUT', `${teamPath}/users/${invitedRow?.id}/recover-account`, {
+  token, body: { resetMasterPassword: true, resetTwoFactor: false, newMasterPasswordHash: 'hash-y', key: enc('recovered-key') },
+});
+check('recover the member account', recovered.status === 200, `${recovered.status} ${recovered.text}`);
+check('the old member password no longer logs in', (await login(email2, 'hash-x')).status !== 200);
+const recoveredToken = (await login(email2, 'hash-y')).json?.access_token;
+check('the member logs in with the new password', !!recoveredToken);
 check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
 check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
 await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });
-await call('DELETE', `/api/organizations/${secondOrg.json?.id}`, { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
-const deleted = await call('POST', '/api/accounts/delete', { token: second.json?.access_token, body: { masterPasswordHash: 'hash-x' } });
+await call('DELETE', `/api/organizations/${secondOrg.json?.id}`, { token: recoveredToken, body: { masterPasswordHash: 'hash-y' } });
+const deleted = await call('POST', '/api/accounts/delete', { token: recoveredToken, body: { masterPasswordHash: 'hash-y' } });
 check('delete own account', deleted.status === 200, `${deleted.status} ${deleted.text}`);
-check('deleted account cannot log in', (await login(email2, 'hash-x')).status !== 200);
+check('deleted account cannot log in', (await login(email2, 'hash-y')).status !== 200);
 
 // Emergency access: the first account grants takeover to a third, which takes it over.
 // Runs last because it changes the first account's password.
@@ -301,6 +358,44 @@ grantorToken = session.json?.access_token;
 check('grantor rejects', (await ea('POST', `/${eaId}/reject`, grantorToken)).json?.status === 2);
 check('grantor removes the contact', (await ea('DELETE', `/${eaId}`, grantorToken)).status === 200);
 check('no contacts left', (await ea('GET', '/trusted', grantorToken)).json?.data?.length === 0);
+
+// Account, folder and cipher routes added for parity: avatar, profile POST, key rotation data,
+// folder POST aliases, legacy multipart attachments and attachment share, and vault purge.
+const now = await call('GET', '/api/now');
+check('GET /api/now returns a timestamp', now.status === 200 && !Number.isNaN(Date.parse(now.json)), `${now.status} ${now.text.slice(0, 60)}`);
+const avatar = await call('PUT', '/api/accounts/avatar', { token: grantorToken, body: { avatarColor: '#12ab34' } });
+check('set the avatar color', avatar.status === 200 && avatar.json?.avatarColor === '#12ab34', `${avatar.status} ${avatar.text.slice(0, 200)}`);
+check('sync reports the avatar color', (await call('GET', '/api/sync', { token: grantorToken })).json?.profile?.avatarColor === '#12ab34');
+const named = await call('POST', '/api/accounts/profile', { token: grantorToken, body: { name: 'Renamed', culture: 'en-US' } });
+check('POST /api/accounts/profile renames', named.status === 200 && named.json?.name === 'Renamed', `${named.status} ${named.text.slice(0, 200)}`);
+const rotationData = await call('GET', '/api/accounts/key-management/key-rotation-data', { token: grantorToken });
+check('key rotation data', rotationData.json?.object === 'keyRotationData' && Array.isArray(rotationData.json?.emergencyAccessKeyData), rotationData.text);
+check('rotate-user-keys is refused', (await call('POST', '/api/accounts/key-management/rotate-user-keys', { token: grantorToken, body: {} })).status === 501);
+check('GET device verification settings', (await call('GET', '/api/two-factor/get-device-verification-settings', { token: grantorToken })).json?.object === 'deviceVerificationSettings');
+check('webauthn/all without keys is 400', (await call('DELETE', '/api/two-factor/webauthn/all', { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 400);
+const miscFolder = await call('POST', '/api/folders', { token: grantorToken, body: { name: enc('misc') } });
+const renamedFolder = await call('POST', `/api/folders/${miscFolder.json?.id}`, { token: grantorToken, body: { name: enc('misc2') } });
+check('POST /api/folders/{id} renames', renamedFolder.status === 200 && renamedFolder.json?.name === enc('misc2'), `${renamedFolder.status} ${renamedFolder.text}`);
+check('POST /api/folders/{id}/delete', (await call('POST', `/api/folders/${miscFolder.json?.id}/delete`, { token: grantorToken })).status === 204);
+const attachHost = await call('POST', '/api/ciphers', { token: grantorToken, body: { type: 2, name: enc('attach'), secureNote: { type: 0 } } });
+const legacyForm = (name, key, content) => {
+  const f = new FormData();
+  f.set('key', key);
+  f.set('data', new Blob([content]), name);
+  return f;
+};
+const legacy = await call('POST', `/api/ciphers/${attachHost.json?.id}/attachment`, { token: grantorToken, multipart: legacyForm(enc('a.txt'), enc('akey'), 'hello') });
+const legacyAttachment = legacy.json?.attachments?.[0];
+check('legacy multipart attachment upload', legacy.status === 200 && legacyAttachment?.size === '5', `${legacy.status} ${legacy.text.slice(0, 300)}`);
+const shareUpload = await call('POST', `/api/ciphers/${attachHost.json?.id}/attachment/${legacyAttachment?.id}/share`, { token: grantorToken, multipart: legacyForm(enc('b.txt'), enc('bkey'), 'hello2') });
+check('attachment share replaces the file', shareUpload.status === 200 && shareUpload.json?.attachments?.length === 1 && shareUpload.json.attachments[0].id !== legacyAttachment?.id, `${shareUpload.status} ${shareUpload.text.slice(0, 300)}`);
+const download = await call('GET', `/api/ciphers/${attachHost.json?.id}/attachment/${shareUpload.json?.attachments?.[0]?.id}`, { token: grantorToken });
+const downloaded = download.json?.url ? await (await fetch(download.json.url)).text() : null;
+check('the replacement downloads', downloaded === 'hello2', `${download.status} ${downloaded}`);
+check('purge needs the password', (await call('POST', '/api/ciphers/purge', { token: grantorToken, body: { masterPasswordHash: 'wrong' } })).status === 400);
+check('purge the personal vault', (await call('POST', '/api/ciphers/purge', { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 200);
+const purged = await call('GET', '/api/sync', { token: grantorToken });
+check('nothing is left after the purge', purged.json?.ciphers?.length === 0 && purged.json?.folders?.length === 0, purged.text.slice(0, 300));
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

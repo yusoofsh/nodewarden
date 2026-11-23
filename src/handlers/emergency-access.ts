@@ -1,6 +1,5 @@
 import type { Env, User } from '../types';
 import { StorageService } from '../services/storage';
-import { AuthService } from '../services/auth';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import {
   EmergencyAccessStatus as Status,
@@ -16,7 +15,8 @@ import {
   type EmergencyAccess,
   type EmergencyAccessRole,
 } from '../services/storage-emergency-access-repo';
-import { cipherToResponse, isCipherResponseSyncCompatible, isValidEncString } from './ciphers';
+import { cipherToResponse, isCipherResponseSyncCompatible } from './ciphers';
+import { readNewMasterPassword, resetUserCredentials } from './master-password-reset';
 import { handleGetAttachment } from './attachments';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -212,7 +212,7 @@ export async function handleEmergencyAccessRoute(
       const found = await findEmergencyAccess(db, id, user.id, ['grantee']);
       if (!found) return notFound();
       if (!isValidRequest(found.access, Type.Takeover)) return errorResponse(NOT_VALID, 400);
-      return takeoverPassword(request, env, user, found.access.grantorId, now);
+      return takeoverPassword(request, env, user, found.access.grantorId);
     }
     case 'GET policies': {
       const found = await findEmergencyAccess(db, id, user.id, ['grantee']);
@@ -258,51 +258,14 @@ async function invite(request: Request, env: Env, user: User, now: string): Prom
 
 // The grantee sets a new master password on the grantor's account. Like Vaultwarden,
 // this also disables the grantor's two-factor methods, which would block the login.
-async function takeoverPassword(request: Request, env: Env, grantee: User, grantorId: string, now: string): Promise<Response> {
+async function takeoverPassword(request: Request, env: Env, grantee: User, grantorId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const grantor = await storage.getUserById(grantorId);
   if (!grantor) return notFound();
-  const body = await readJson(request);
-
-  let newHash: string;
-  let newKey: string;
-  if (isRecord(body.authenticationData) && isRecord(body.unlockData)) {
-    const auth = body.authenticationData;
-    const unlock = body.unlockData;
-    const salt = grantor.email.trim().toLowerCase();
-    const kdfMatches = (source: Json) => {
-      const kdf = isRecord(source.kdf) ? source.kdf : {};
-      return (
-        kdf.kdfType === grantor.kdfType &&
-        kdf.iterations === grantor.kdfIterations &&
-        (grantor.kdfType !== 1 || (kdf.memory === grantor.kdfMemory && kdf.parallelism === grantor.kdfParallelism))
-      );
-    };
-    if (str(auth.salt) !== salt || str(unlock.salt) !== salt) return errorResponse('Invalid master password salt', 400);
-    if (!kdfMatches(auth) || !kdfMatches(unlock)) return errorResponse('KDF settings do not match the grantor account', 400);
-    newHash = str(auth.masterPasswordAuthenticationHash);
-    newKey = str(unlock.masterKeyWrappedUserKey);
-  } else {
-    newHash = str(body.newMasterPasswordHash);
-    newKey = str(body.key);
-  }
-  if (!newHash || !newKey) return errorResponse('Invalid request!', 400);
-  if (!isValidEncString(newKey)) return errorResponse('key is not a valid encrypted string', 400);
-
-  grantor.masterPasswordHash = await new AuthService(env).hashPasswordServer(newHash);
-  grantor.key = newKey;
-  grantor.securityStamp = generateUUID();
-  grantor.totpSecret = null;
-  grantor.totpRecoveryCode = null;
-  grantor.yubikeyKey1 = grantor.yubikeyKey2 = grantor.yubikeyKey3 = grantor.yubikeyKey4 = grantor.yubikeyKey5 = null;
-  grantor.yubikeyNfc = false;
-  grantor.updatedAt = now;
-  await storage.saveUser(grantor);
-  for (const credential of await storage.getAccountPasskeyCredentialsByUserId(grantor.id, 'twoFactor')) {
-    await storage.deleteAccountPasskeyCredential(grantor.id, credential.id, 'twoFactor');
-  }
-  await storage.deleteRefreshTokensByUserId(grantor.id);
-  AuthService.invalidateUserCache(grantor.id);
+  const password = readNewMasterPassword(await readJson(request), grantor);
+  if (password === null) return errorResponse('Invalid request!', 400);
+  if (typeof password === 'string') return errorResponse(password, 400);
+  await resetUserCredentials(env, grantor, password, true);
   await safeWriteAuditEvent(env, {
     actorUserId: grantee.id,
     action: 'account.emergency-access.takeover',

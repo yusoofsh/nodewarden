@@ -18,17 +18,20 @@ import {
   type OrganizationMember,
   MemberStatus,
   MemberType,
+  clientStatus,
   deleteMember,
   getMember,
   getMemberById,
   inviteMembers,
   listCollectionAccess,
   listCollections,
+  isRevoked,
   listMembersWithUsers,
+  setMemberRevoked,
   transitionMember,
   updateMemberAccess,
 } from '../services/storage-organization-repo';
-import { isLastConfirmedOwner, roleManageError } from '../services/org-access';
+import { isLastConfirmedOwner, isOwner, roleManageError } from '../services/org-access';
 import { memberDetailsJson } from '../utils/organization-response';
 import { listGroupMembers } from '../services/storage-organization-group-repo';
 import { readMemberGroupIds } from './organization-groups';
@@ -44,7 +47,7 @@ type ActionResult = Promise<string | null>;
 
 const ok = () => new Response(null, { status: 200 });
 const ids = (body: Json | null): string[] => (Array.isArray(body?.ids) ? body.ids.map((id) => str(id).toLowerCase()) : []);
-const bulkResult = (id: string, error: string | null) => ({ object: 'OrganizationBulkConfirmResponseModel', id, error: error ?? '' });
+const bulkResult = (id: string, error: string | null, object = 'OrganizationBulkConfirmResponseModel') => ({ object, id, error: error ?? '' });
 const isFullAccessRole = (type: number): boolean => type === MemberType.Owner || type === MemberType.Admin;
 
 function parseRole(value: unknown): number | null {
@@ -264,4 +267,74 @@ export async function handleMemberPublicKeys(request: Request, env: Env, caller:
     if (member && user) data.push({ object: 'organizationUserPublicKeyResponseModel', id: member.id, userId: user.id, key: user.publicKey });
   }
   return list(data);
+}
+
+// Revoking keeps the member's row, collections and groups; it grants nothing until restored, since
+// every access check asks for a confirmed member. Restoring returns the member to its earlier status.
+async function revoke(env: Env, caller: OrganizationMember, memberId: string, actor: EventActor): ActionResult {
+  const member = await getMemberById(env.DB, caller.organizationId, memberId);
+  if (!member) return 'User not found in organization';
+  if (isRevoked(member.status)) return 'User is already revoked';
+  if (member.id === caller.id) return 'You cannot revoke yourself';
+  if (member.type === MemberType.Owner && !isOwner(caller)) return 'Only owners can revoke other owners';
+  if (await isLastConfirmedOwner(env.DB, member)) return 'Organization must have at least one confirmed owner';
+  if (!(await setMemberRevoked(env.DB, caller.organizationId, member.id, true))) return 'User is already revoked';
+  await touchUsers(env.DB, [member.userId]);
+  await logEvents(env, actor, [memberEvent(EventType.OrganizationUserRevoked, member)]);
+  return null;
+}
+
+async function restore(env: Env, caller: OrganizationMember, memberId: string, actor: EventActor): ActionResult {
+  const member = await getMemberById(env.DB, caller.organizationId, memberId);
+  if (!member) return 'User not found in organization';
+  if (!isRevoked(member.status)) return 'User is already active';
+  if (member.id === caller.id) return 'You cannot restore yourself';
+  if (member.type === MemberType.Owner && !isOwner(caller)) return 'Only owners can restore other owners';
+  if (!(await setMemberRevoked(env.DB, caller.organizationId, member.id, false))) return 'User is already active';
+  await touchUsers(env.DB, [member.userId]);
+  await logEvents(env, actor, [memberEvent(EventType.OrganizationUserRestored, member)]);
+  return null;
+}
+
+const BULK_USER_RESULT = 'OrganizationUserBulkResponseModel';
+
+// PUT /api/organizations/{id}/users/{memberId}/revoke
+export const handleRevokeMember = (env: Env, caller: OrganizationMember, memberId: string, actor: EventActor) =>
+  single(revoke(env, caller, memberId, actor));
+
+// PUT /api/organizations/{id}/users/{memberId}/restore, .../restore/vnext
+// vnext also sends a name for the member's default collection, which is not offered, so it is ignored.
+export const handleRestoreMember = (env: Env, caller: OrganizationMember, memberId: string, actor: EventActor) =>
+  single(restore(env, caller, memberId, actor));
+
+// PUT /api/organizations/{id}/users/revoke, PUT /api/organizations/{id}/users/restore
+export async function handleBulkRevokeOrRestore(
+  request: Request,
+  env: Env,
+  caller: OrganizationMember,
+  revoked: boolean,
+  actor: EventActor
+): Promise<Response> {
+  const results = [];
+  for (const id of ids(await readBody(request))) {
+    const error = await (revoked ? revoke : restore)(env, caller, id, actor);
+    results.push(bulkResult(id, error, BULK_USER_RESULT));
+  }
+  return list(results);
+}
+
+// GET /api/organizations/{id}/users/mini-details
+export async function handleGetMemberMiniDetails(env: Env, caller: OrganizationMember): Promise<Response> {
+  const members = await listMembersWithUsers(env.DB, caller.organizationId);
+  return list(
+    members.map((m) => ({
+      id: m.id,
+      userId: m.userId,
+      type: m.type,
+      status: clientStatus(m.status),
+      name: m.name,
+      email: m.email,
+      object: 'organizationUserUserMiniDetails',
+    }))
+  );
 }

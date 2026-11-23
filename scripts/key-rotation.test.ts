@@ -391,3 +391,28 @@ test('a rotation re-keys personal ciphers only; organization ciphers keep the or
   assert.equal((await storage.getCipherForUser(CIPHER, USER))?.name, fresh('name'));
   assert.deepEqual(await db.prepare('SELECT * FROM ciphers WHERE id = ?').bind(ORG_CIPHER).first(), before);
 });
+
+test('a rotation re-wraps every account recovery key, and refuses one left out', async () => {
+  const { env, db } = await setup();
+  const ORG = 'eeeeeeee-0000-0000-0000-000000000001';
+  await db.prepare("INSERT INTO organizations(id, name, billing_email, created_at, updated_at) VALUES (?, 'o', 'b', '2026-01-01', '2026-01-01')").bind(ORG).run();
+  await db
+    .prepare(
+      "INSERT INTO organization_members(id, organization_id, user_id, status, type, access_all, reset_password_key, created_at, updated_at) VALUES ('m-1', ?, ?, 2, 2, 0, '4.oldrecovery', '2026-01-01', '2026-01-01')"
+    )
+    .bind(ORG, USER)
+    .run();
+  const before = await snapshot(db);
+  const missing = await call(env, payload());
+  assert.equal(missing.status, 400);
+  assert.match(JSON.stringify(await missing.json()), /All existing reset password keys must be included/);
+  assert.equal(await snapshot(db), before);
+
+  const base = payload();
+  const unlock = { ...base.accountUnlockData, organizationAccountRecoveryUnlockData: [{ organizationId: ORG.toUpperCase(), resetPasswordKey: '' }] };
+  assert.equal((await call(env, { ...base, accountUnlockData: unlock })).status, 400);
+  unlock.organizationAccountRecoveryUnlockData[0].resetPasswordKey = '4.newrecovery';
+  assert.equal((await call(env, { ...base, accountUnlockData: unlock })).status, 200);
+  const row = await db.prepare("SELECT reset_password_key FROM organization_members WHERE id = 'm-1'").first<{ reset_password_key: string }>();
+  assert.equal(row?.reset_password_key, '4.newrecovery');
+});

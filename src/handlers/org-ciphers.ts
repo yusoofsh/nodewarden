@@ -10,11 +10,19 @@ import {
   getCollectionWriteAccess,
   getOrgCipherForUser,
   insertOrgCipher,
+  insertOrgCipherStatements,
   listCipherCollectionIds,
+  listOrgCipherIds,
   listOrgCiphers,
+  listOrgCiphersForUser,
+  listWritableOrgCipherIds,
   shareCipher,
   updateCipherCollections,
+  updateCiphersCollections,
 } from '../services/storage-org-cipher-repo';
+import { type Collection, insertCollection, listCollections, listCollectionsForUser } from '../services/storage-organization-repo';
+import { LIMITS } from '../config/limits';
+import { generateUUID } from '../utils/uuid';
 import { authorizeOrgRequest, canEditCipherCollections, getConfirmedMembership, hasFullAccess } from '../services/org-access';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
@@ -28,6 +36,10 @@ import {
   syncIncomingAttachmentMetadata,
 } from './ciphers';
 import { isRecord, list, readBody, str, touchOrganizationVault } from './organizations';
+
+const queryOrganizationId = (request: Request): string => str(new URL(request.url).searchParams.get('organizationId')).toLowerCase();
+const idList = (value: unknown): string[] =>
+  Array.isArray(value) ? [...new Set(value.map((id) => str(id).toLowerCase()).filter(Boolean))] : [];
 
 const STALE = 'The client copy of this cipher is out of date. Resync the client and try again.';
 
@@ -241,12 +253,131 @@ export async function handleUpdateCipherCollections(
 // GET /api/ciphers/organization-details?organizationId=
 // Every cipher of the organization with all its collections, for owners and admins.
 export async function handleGetOrganizationCipherDetails(request: Request, env: Env, userId: string): Promise<Response> {
-  const organizationId = str(new URL(request.url).searchParams.get('organizationId')).toLowerCase();
+  const organizationId = queryOrganizationId(request);
   if (!organizationId) return errorResponse('organizationId is required', 400);
   const member = await authorizeOrgRequest(env.DB, organizationId, userId, 'admin');
   if (member instanceof Response) return member;
 
-  const ciphers = await listOrgCiphers(env.DB, organizationId);
+  return respondWithCipherList(request, env, await listOrgCiphers(env.DB, organizationId));
+}
+
+async function respondWithCipherList(request: Request, env: Env, ciphers: AccessibleCipher[]): Promise<Response> {
   const attachments = await new StorageService(env.DB).getAttachmentsByCipherIds(ciphers.map(({ cipher }) => cipher.id));
   return list(ciphers.map((accessible) => cipherResponseFor(request, accessible, attachments.get(accessible.cipher.id) || [])));
+}
+
+// GET /api/ciphers/organization-details/assigned?organizationId=
+// The organization ciphers the caller can see, as in their own vault: every one for a member with
+// full access, else those of their collections.
+export async function handleGetAssignedOrganizationCiphers(request: Request, env: Env, userId: string): Promise<Response> {
+  const organizationId = queryOrganizationId(request);
+  const member = await authorizeOrgRequest(env.DB, organizationId, userId, 'member');
+  if (member instanceof Response) return member;
+  const ciphers = (await listOrgCiphersForUser(env.DB, userId)).filter(({ cipher }) => cipher.organizationId === organizationId);
+  return respondWithCipherList(request, env, ciphers);
+}
+
+// POST /api/ciphers/bulk-collections
+// Adds every listed collection to, or removes it from, every listed cipher the caller may edit. As in
+// Vaultwarden, ciphers that are gone or not editable are skipped, and a collection the caller may not
+// edit refuses the whole request.
+export async function handleBulkCipherCollections(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await readBody(request);
+  if (!body) return errorResponse('Invalid JSON', 400);
+  const organizationId = str(body.organizationId).toLowerCase();
+  if (!(await getConfirmedMembership(env.DB, organizationId, userId))) {
+    return errorResponse('You need to be a Member of the Organization to call this endpoint', 400);
+  }
+  const collectionIds = idList(body.collectionIds);
+  const writable = await getCollectionWriteAccess(env.DB, organizationId, userId, collectionIds);
+  if (collectionIds.some((id) => !writable.get(id))) return errorResponse('Resource not found', 404);
+
+  const inOrganization = new Set(await listOrgCipherIds(env.DB, organizationId));
+  const cipherIds = await listWritableOrgCipherIds(env.DB, userId, idList(body.cipherIds).filter((id) => inOrganization.has(id)));
+  await updateCiphersCollections(env.DB, cipherIds, organizationId, collectionIds, body.removeCollections === true);
+  await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  return new Response(null, { status: 200 });
+}
+
+/** A new organization cipher from an imported item, or why it is refused. */
+function buildImportedCipher(item: Record<string, unknown>, userId: string, organizationId: string, now: string): Cipher | string {
+  const blank = {
+    id: generateUUID(), userId, organizationId, type: Number(item.type) || 1, folderId: null, name: null, notes: null,
+    favorite: false, reprompt: 0, key: null, createdAt: now, updatedAt: now, archivedAt: null, deletedAt: null,
+  } as unknown as Cipher;
+  const built = buildFullCipherUpdate(blank, item, true);
+  if ('error' in built) return built.error;
+  return clearPerUserCipherState(built.cipher);
+}
+
+// POST /api/ciphers/import-organization?organizationId=
+// The organization comes from the query, never from the imported items. Everything is checked before
+// the first write: a member without full access may only import into collections they manage, and
+// every item needs a collection.
+export async function handleImportOrganizationCiphers(request: Request, env: Env, userId: string): Promise<Response> {
+  const organizationId = queryOrganizationId(request);
+  const member = await authorizeOrgRequest(env.DB, organizationId, userId, 'member');
+  if (member instanceof Response) return member;
+  const body = await readBody(request);
+  if (!body) return errorResponse('Invalid JSON', 400);
+  const items = Array.isArray(body.ciphers) ? body.ciphers : [];
+  const imported = Array.isArray(body.collections) ? body.collections : [];
+  if (items.length + imported.length > LIMITS.performance.importItemLimit) {
+    return errorResponse(`Import exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
+  }
+
+  const assigned: Array<Set<number>> = items.map(() => new Set());
+  for (const relation of Array.isArray(body.collectionRelationships) ? body.collectionRelationships : []) {
+    const key = isRecord(relation) ? relation.key : null;
+    const value = isRecord(relation) ? relation.value : null;
+    if (!Number.isInteger(key) || !Number.isInteger(value) || (key as number) < 0 || (key as number) >= items.length
+      || (value as number) < 0 || (value as number) >= imported.length) {
+      return errorResponse('Invalid collection relationship', 400);
+    }
+    assigned[key as number].add(value as number);
+  }
+
+  const full = hasFullAccess(member);
+  const existing = new Set((await listCollections(env.DB, organizationId)).map((c) => c.id));
+  const manageable = full
+    ? null
+    : new Set(
+        (await listCollectionsForUser(env.DB, userId))
+          .filter((row) => row.collection.organizationId === organizationId && row.access?.manage)
+          .map((row) => row.collection.id)
+      );
+  const now = new Date().toISOString();
+  const created: Collection[] = [];
+  const collectionIds: string[] = [];
+  for (const entry of imported) {
+    if (!isRecord(entry)) return errorResponse('Invalid collection', 400);
+    const id = str(entry.id).toLowerCase();
+    if (id && existing.has(id)) {
+      if (manageable && !manageable.has(id)) return errorResponse("The current user isn't allowed to manage this collection", 400);
+      collectionIds.push(id);
+      continue;
+    }
+    if (!full) return errorResponse("The current user isn't allowed to create new collections", 400);
+    const name = str(entry.name);
+    if (!name) return errorResponse('Collection name is required', 400);
+    const collection = { id: generateUUID(), organizationId, name, externalId: str(entry.externalId) || null, createdAt: now, updatedAt: now };
+    created.push(collection);
+    collectionIds.push(collection.id);
+  }
+
+  const statements: D1PreparedStatement[] = created.map((c) => insertCollection(env.DB, c));
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const links = [...assigned[i]].map((index) => collectionIds[index]);
+    if (!full && !links.length) return errorResponse("You don't have permission to add cipher directly to organization", 400);
+    const cipher = isRecord(item) ? buildImportedCipher(item, userId, organizationId, now) : 'Invalid cipher';
+    if (typeof cipher === 'string') return errorResponse(`Cipher ${i + 1}: ${cipher}`, 400);
+    statements.push(...insertOrgCipherStatements(env.DB, cipher, links));
+  }
+  // Collections come first, so each chunk only links to collections already written.
+  for (let i = 0; i < statements.length; i += LIMITS.performance.bulkMoveChunkSize) {
+    await env.DB.batch(statements.slice(i, i + LIMITS.performance.bulkMoveChunkSize));
+  }
+  await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  return new Response(null, { status: 200 });
 }

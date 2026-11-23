@@ -2,7 +2,7 @@ import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
+import { buildDirectUploadUrl, getMultipartRequestMaxBytes, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { sanitizeDownloadContentType } from '../utils/content-type';
 import {
@@ -256,6 +256,74 @@ export async function handleCreateAttachment(
     fileUploadType: 1,
     cipherResponse,
   });
+}
+
+// POST /api/ciphers/{cipherId}/attachment and /attachment-admin as multipart/form-data, and
+// POST /api/ciphers/{cipherId}/attachment/{attachmentId}/share.
+// The legacy upload: one request carries the attachment key and the file, whose file name is the
+// encrypted name. Clients use /share to re-upload an attachment re-encrypted for an organization
+// before sharing its cipher; the new file replaces `replaceAttachmentId` once it is stored.
+export async function handleLegacyUploadAttachment(
+  request: Request,
+  env: Env,
+  userId: string,
+  cipherId: string,
+  replaceAttachmentId: string | null = null
+): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const accessible = await loadCipher(env, cipherId, userId, true);
+  if (accessible instanceof Response) return accessible;
+  const replaced = replaceAttachmentId ? await loadAttachment(storage, replaceAttachmentId, cipherId) : null;
+  if (replaceAttachmentId && !replaced) return errorResponse('Attachment not found', 404);
+
+  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.attachment.maxFileSizeBytes);
+  const tooLarge = `File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`;
+  if (!(request.headers.get('content-type') || '').includes('multipart/form-data')) {
+    return errorResponse('Expected a multipart/form-data upload', 400);
+  }
+  if (Number(request.headers.get('content-length') || 0) > getMultipartRequestMaxBytes(maxFileSize)) {
+    return errorResponse(tooLarge, 413);
+  }
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return errorResponse('Invalid form data', 400);
+  }
+  const file = form.get('data');
+  const key = form.get('key');
+  if (!file || typeof file === 'string') return errorResponse('No file uploaded', 400);
+  if (!file.name) return errorResponse('No filename provided', 400);
+  if (typeof key !== 'string' || !key.trim()) return errorResponse('No attachment key provided', 400);
+  if (file.size > maxFileSize) return errorResponse(tooLarge, 413);
+
+  const attachment: Attachment = {
+    id: generateUUID(),
+    cipherId,
+    fileName: file.name,
+    size: file.size,
+    sizeName: formatSize(file.size),
+    key: key.trim(),
+  };
+  try {
+    await putBlobObject(env, getAttachmentObjectKey(cipherId, attachment.id), file.stream(), {
+      size: file.size,
+      contentType: file.type || 'application/octet-stream',
+      customMetadata: { cipherId, attachmentId: attachment.id },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('KV object too large')) return errorResponse(tooLarge, 413);
+    return errorResponse('Attachment storage is not configured', 500);
+  }
+  await storage.saveAttachment(attachment);
+  if (replaced) {
+    await deleteBlobObject(env, getAttachmentObjectKey(cipherId, replaced.id));
+    await storage.deleteAttachment(replaced.id);
+  }
+  await publishAttachmentChange(request, env, storage, accessible.cipher);
+
+  return jsonResponse(await cipherResponseWithAttachments(storage, cipherId, userId));
 }
 
 // POST /api/ciphers/{cipherId}/attachment/{attachmentId}

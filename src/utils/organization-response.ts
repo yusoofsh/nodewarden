@@ -1,10 +1,11 @@
 // JSON shapes for organizations, members, collections, groups and policies, as Vaultwarden returns them.
-// Events and account recovery are not offered, so their flags are false.
 import type { Group, GroupAccess } from '../services/storage-organization-group-repo';
 import type { Policy } from '../services/storage-organization-policy-repo';
 import {
   MemberStatus,
   MemberType,
+  activeStatus,
+  clientStatus,
   type Collection,
   type CollectionAccess,
   type MemberWithUser,
@@ -59,7 +60,7 @@ export function organizationJson(org: Organization) {
     usePam: false,
     usePhishingBlocker: false,
     hasPublicAndPrivateKeys: hasKeys(org),
-    useResetPassword: false,
+    useResetPassword: true,
     allowAdminAccessToAllCollectionItems: true,
     limitCollectionCreation: true,
     limitCollectionDeletion: true,
@@ -103,7 +104,7 @@ export function profileOrganizationJson(member: OrganizationMember, org: Organiz
     selfHost: true,
     hasPublicAndPrivateKeys: hasKeys(org),
     resetPasswordEnrolled: member.resetPasswordKey !== null,
-    useResetPassword: false,
+    useResetPassword: true,
     ssoBound: false,
     useSso: false,
     useKeyConnector: false,
@@ -142,7 +143,7 @@ export function profileOrganizationJson(member: OrganizationMember, org: Organiz
     maxStorageGb: 32767,
     userId: member.userId,
     key: member.akey ? member.akey : null,
-    status: member.status,
+    status: clientStatus(member.status),
     type: member.type,
     enabled: true,
     object: 'profileOrganization',
@@ -193,7 +194,7 @@ export function memberDetailsJson(member: MemberWithUser, collections: Collectio
   return {
     id: member.id,
     userId: member.userId,
-    name: member.status >= MemberStatus.Accepted ? member.name : null,
+    name: activeStatus(member.status) >= MemberStatus.Accepted ? member.name : null,
     email: member.email,
     externalId: null,
     avatarColor: null,
@@ -202,7 +203,7 @@ export function memberDetailsJson(member: MemberWithUser, collections: Collectio
       collections && !member.accessAll
         ? collections.map((c) => ({ id: c.collectionId, readOnly: c.readOnly, hidePasswords: c.hidePasswords, manage: c.manage }))
         : [],
-    status: member.status,
+    status: clientStatus(member.status),
     type: member.type,
     twoFactorEnabled: member.hasTwoFactor,
     resetPasswordEnrolled: member.resetPasswordKey !== null,

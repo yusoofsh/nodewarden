@@ -2,6 +2,18 @@
 import { type GroupAccess, type GroupMember, insertGroupAccess, insertGroupMember } from './storage-organization-group-repo';
 
 export const MemberStatus = { Revoked: -1, Invited: 0, Accepted: 1, Confirmed: 2 } as const;
+
+// As in Vaultwarden, a revoked member keeps its earlier status, offset by this, so restoring it returns
+// that status: -128 invited, -127 accepted, -126 confirmed. Every check that grants access compares
+// with a positive status, so a revoked row grants nothing.
+const REVOKED_OFFSET = 128;
+/** The stored statuses of revoked members that had been accepted or confirmed. */
+export const REVOKED_ENROLLABLE_STATUSES = [MemberStatus.Accepted - REVOKED_OFFSET, MemberStatus.Confirmed - REVOKED_OFFSET];
+export const isRevoked = (status: number): boolean => status < MemberStatus.Invited;
+/** The status clients see: every revoked status reads as Revoked. */
+export const clientStatus = (status: number): number => (isRevoked(status) ? MemberStatus.Revoked : status);
+/** The status a member had before it was revoked, or its status. */
+export const activeStatus = (status: number): number => (isRevoked(status) ? status + REVOKED_OFFSET : status);
 export const MemberType = { Owner: 0, Admin: 1, User: 2, Custom: 4 } as const;
 
 export interface Organization {
@@ -245,7 +257,7 @@ function insertAccess(db: D1Database, a: CollectionAccess): D1PreparedStatement 
     .bind(a.collectionId, a.memberId, a.readOnly ? 1 : 0, a.hidePasswords ? 1 : 0, a.manage ? 1 : 0);
 }
 
-function insertCollection(db: D1Database, collection: Collection): D1PreparedStatement {
+export function insertCollection(db: D1Database, collection: Collection): D1PreparedStatement {
   return db
     .prepare('INSERT INTO collections(id, organization_id, name, external_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)')
     .bind(collection.id, collection.organizationId, collection.name, collection.externalId, collection.createdAt, collection.updatedAt);
@@ -431,4 +443,107 @@ function replaceMemberGroups(db: D1Database, memberId: string, groupIds: string[
 /** Replaces the groups a member is in, in one transaction. */
 export async function setMemberGroups(db: D1Database, memberId: string, groupIds: string[]): Promise<void> {
   await db.batch(replaceMemberGroups(db, memberId, groupIds));
+}
+
+/**
+ * Revokes a member that is not revoked, or restores a revoked one to its earlier status. Returns
+ * false when it already was, so a repeated request changes nothing.
+ */
+export async function setMemberRevoked(db: D1Database, organizationId: string, memberId: string, revoked: boolean): Promise<boolean> {
+  const change = revoked
+    ? `status = status - ${REVOKED_OFFSET}, updated_at = ? WHERE id = ? AND organization_id = ? AND status >= ${MemberStatus.Invited}`
+    : `status = status + ${REVOKED_OFFSET}, updated_at = ? WHERE id = ? AND organization_id = ? ` +
+      `AND status BETWEEN ${MemberStatus.Invited - REVOKED_OFFSET} AND ${MemberStatus.Confirmed - REVOKED_OFFSET}`;
+  const result = await db.prepare(`UPDATE organization_members SET ${change}`).bind(new Date().toISOString(), memberId, organizationId).run();
+  return Number(result.meta?.changes || 0) > 0;
+}
+
+export async function setMemberResetPasswordKey(db: D1Database, memberId: string, key: string | null): Promise<void> {
+  await db
+    .prepare('UPDATE organization_members SET reset_password_key = ?, updated_at = ? WHERE id = ?')
+    .bind(key, new Date().toISOString(), memberId)
+    .run();
+}
+
+/** Sets the organization's key pair when it has none. Returns false when it already had one. */
+export async function setOrganizationKeys(db: D1Database, id: string, privateKey: string, publicKey: string): Promise<boolean> {
+  const result = await db
+    .prepare(
+      'UPDATE organizations SET private_key = ?, public_key = ?, updated_at = ? ' +
+      'WHERE id = ? AND NOT (private_key IS NOT NULL AND public_key IS NOT NULL)'
+    )
+    .bind(privateKey, publicKey, new Date().toISOString(), id)
+    .run();
+  return Number(result.meta?.changes || 0) > 0;
+}
+
+export interface OrganizationApiKey {
+  apiKey: string;
+  revisionDate: string;
+}
+
+export async function getOrganizationApiKey(db: D1Database, id: string): Promise<OrganizationApiKey | null> {
+  const row = await db
+    .prepare('SELECT api_key, api_key_revision_date FROM organizations WHERE id = ?')
+    .bind(id)
+    .first<{ api_key: string | null; api_key_revision_date: string | null }>();
+  return row?.api_key ? { apiKey: row.api_key, revisionDate: row.api_key_revision_date ?? '' } : null;
+}
+
+export async function setOrganizationApiKey(db: D1Database, id: string, key: OrganizationApiKey): Promise<void> {
+  await db
+    .prepare('UPDATE organizations SET api_key = ?, api_key_revision_date = ? WHERE id = ?')
+    .bind(key.apiKey, key.revisionDate, id)
+    .run();
+}
+
+/**
+ * Gives these members and groups access to each collection, keeping every other assignment, in one
+ * transaction. An existing assignment of a listed member or group takes the new flags.
+ */
+export async function addCollectionAccess(
+  db: D1Database,
+  organizationId: string,
+  collectionIds: string[],
+  access: Omit<CollectionAccess, 'collectionId'>[],
+  groupAccess: Omit<GroupAccess, 'collectionId'>[]
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.batch(
+    collectionIds.flatMap((collectionId) => [
+      db.prepare('UPDATE collections SET updated_at = ? WHERE id = ? AND organization_id = ?').bind(now, collectionId, organizationId),
+      ...access.map((a) =>
+        db
+          .prepare(
+            'INSERT INTO collection_members(collection_id, member_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?) ' +
+            'ON CONFLICT(collection_id, member_id) DO UPDATE SET read_only = excluded.read_only, ' +
+            'hide_passwords = excluded.hide_passwords, manage = excluded.manage'
+          )
+          .bind(collectionId, a.memberId, a.readOnly ? 1 : 0, a.hidePasswords ? 1 : 0, a.manage ? 1 : 0)
+      ),
+      ...groupAccess.map((a) =>
+        db
+          .prepare(
+            'INSERT INTO collection_groups(collection_id, group_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?) ' +
+            'ON CONFLICT(collection_id, group_id) DO UPDATE SET read_only = excluded.read_only, ' +
+            'hide_passwords = excluded.hide_passwords, manage = excluded.manage'
+          )
+          .bind(collectionId, a.groupId, a.readOnly ? 1 : 0, a.hidePasswords ? 1 : 0, a.manage ? 1 : 0)
+      ),
+    ])
+  );
+}
+
+export async function deleteCollections(db: D1Database, organizationId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await db.batch(ids.map((id) => db.prepare('DELETE FROM collections WHERE id = ? AND organization_id = ?').bind(id, organizationId)));
+}
+
+/** The user's memberships enrolled in account recovery: their reset password key wraps the user key. */
+export async function listAccountRecoveryMemberships(db: D1Database, userId: string): Promise<Array<{ id: string; organizationId: string }>> {
+  const { results } = await db
+    .prepare('SELECT id, organization_id FROM organization_members WHERE user_id = ? AND reset_password_key IS NOT NULL')
+    .bind(userId)
+    .all<{ id: string; organization_id: string }>();
+  return (results || []).map((row) => ({ id: row.id, organizationId: row.organization_id }));
 }
