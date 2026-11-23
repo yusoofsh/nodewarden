@@ -39,6 +39,7 @@ import { StorageService } from './services/storage';
 import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins } from './utils/origins';
 import { buildConfigResponse } from './config-response';
+import { handleSsoPublicRoute } from './services/sso';
 
 type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
@@ -407,6 +408,9 @@ export async function handlePublicRoute(
   if (path === '/identity/connect/token' && method === 'POST') {
     return handleToken(request, env);
   }
+
+  const ssoResponse = await handleSsoPublicRoute(request, env, path, method, enforcePublicRateLimit);
+  if (ssoResponse) return ssoResponse;
 
   if (path === '/api/devices/knowndevice' && method === 'GET') {
     const blocked = await enforcePublicRateLimit();

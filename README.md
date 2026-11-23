@@ -51,7 +51,7 @@
 | Domain rules | ✅ | ✅ | Equivalent domains, global exclusions |
 | Fill-assist | ✅ | ✅ | `POST /fill-assist`|
 | Organizations / collections / roles | ✅ | ❌ | Not implemented |
-| SSO / SCIM / directory | ✅ | ❌ | Not implemented |
+| SSO / SCIM / directory | ✅ | ⚠️ | Opt-in OpenID Connect SSO; no SCIM or directory sync |
 
 ---
 
@@ -90,6 +90,31 @@
 >   | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
 >   | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
 
+
+## Single sign-on (OpenID Connect)
+
+Off by default: with `SSO_ENABLED` unset the server behaves exactly as without this feature. When it is on, Bitwarden clients sign in through your identity provider (IdP) with the authorization code flow and PKCE, then unlock the vault with the master password as usual.
+
+1. Register a confidential client at your IdP with the redirect URI `https://<your-domain>/identity/connect/oidc-signin`.
+2. Add these under **Workers settings → Variables and Secrets**, with the client secret as a **Secret**:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SSO_ENABLED` | off | `true` turns SSO on |
+| `SSO_AUTHORITY` | | The IdP issuer, exactly as `issuer` in its discovery document. `https` only; private, loopback and link-local hosts are refused |
+| `SSO_CLIENT_ID` | | Client ID at the IdP |
+| `SSO_CLIENT_SECRET` | | Client secret at the IdP |
+| `SSO_SCOPES` | `email profile` | Scopes to request; `openid` is always added |
+| `SSO_PKCE` | `true` | PKCE between this server and the IdP. The client's own PKCE is always checked |
+| `SSO_SIGNUPS_MATCH_EMAIL` | `false` | Link an IdP identity that no account is linked to yet to the account with the same email, if the IdP says the email is verified. The email must be in the ID token; the userinfo endpoint is not read |
+| `SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION` | `false` | Also match when the IdP sends no `email_verified` claim |
+| `SSO_ONLY` | `false` | Refuse password sign-in for everyone but admins |
+
+- SSO signs in to existing accounts only. Accounts are still created by invite registration, which sets the master password and keys; SSO never creates one. An IdP identity (issuer and subject) is linked to one account the first time it signs in through email matching, and later sign-ins use that link alone. Email matching is the only way to link, so with the defaults no account can sign in through SSO.
+- Email matching is an account-takeover risk: anyone who holds an IdP account with a verified email equal to a NodeWarden account's email signs in as that account. The vault stays encrypted under the master password, but the session can read encrypted data and change or delete items. Turn matching on only if your IdP verifies emails and users cannot change them, and turn it off again once accounts are linked.
+- 2FA still applies after SSO sign-in.
+- `SSO_ONLY` locks out every non-admin account that is not linked yet, and every non-admin on a client that cannot use SSO here (web vault, browser extension). Escape hatch: admin accounts keep password sign-in, so an admin can still get in if the IdP is down or their account is not linked. Passkey and API key sign-in are not affected. Deleting `SSO_ONLY` restores password sign-in for everyone.
+- The server accepts the mobile (`bitwarden://sso-callback`), desktop and CLI (`http://localhost:8065` to `8070`) callbacks, as Vaultwarden does; no official client has been tested against it yet. The web vault and browser extension finish SSO on the official Bitwarden web vault's `sso-connector.html`, which NodeWarden does not serve, so they are refused. Trusted-device encryption and key connector are not supported.
 
 ## FAQ
 

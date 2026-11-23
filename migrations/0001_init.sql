@@ -478,3 +478,28 @@ CREATE TABLE IF NOT EXISTS email_codes (
   PRIMARY KEY (user_id, purpose),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+-- SSO (OpenID Connect). sso_users links one IdP identity to one account; sso_auth holds one
+-- sign-in in progress for ten minutes and is runtime auth state, never backed up.
+CREATE TABLE IF NOT EXISTS sso_users (
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  user_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (issuer, subject),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS sso_auth (
+  state TEXT PRIMARY KEY,
+  client_challenge TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  idp_verifier TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  callback_uri TEXT NOT NULL,
+  binding_hash TEXT NOT NULL,
+  code_hash TEXT UNIQUE,
+  error TEXT,
+  identity TEXT,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sso_auth_expires
+  ON sso_auth(expires_at);

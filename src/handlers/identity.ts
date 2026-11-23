@@ -31,6 +31,7 @@ import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicI
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { consumeEmailCode, obscureEmail } from '../services/email-codes';
 import { TWO_FACTOR_PROVIDER_DUO, duoClientName, hasDuoConfig, readDuoCredentials, startDuoLogin, verifyDuoLogin, type DuoLoginContext } from '../services/duo';
+import { isSsoOnly, readSsoSetting, redeemSsoLogin, resolveSsoLogin, type SsoLogin } from '../services/sso';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -431,17 +432,26 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     );
   }
 
-  if (grantType === 'password') {
+  // SSO (authorization_code) shares the password grant from the account lookup on: 2FA, device and tokens.
+  // While SSO is off the grant stays unsupported, as before.
+  let ssoLogin: SsoLogin | null = null;
+  if (grantType === 'authorization_code' && readSsoSetting(env).state !== 'off') {
+    const resolved = await resolveSsoLogin(env, body);
+    if ('error' in resolved) return identityErrorResponse(resolved.error, 'invalid_grant', 400);
+    ssoLogin = resolved;
+  }
+
+  if (grantType === 'password' || ssoLogin) {
     // Login with password
-    const email = body.username?.toLowerCase();
+    const email = ssoLogin ? ssoLogin.user.email : body.username?.toLowerCase();
     const passwordHash = body.password;
-    const authRequestId = readBodyValue(body, ['authRequest', 'AuthRequest']);
+    const authRequestId = ssoLogin ? undefined : readBodyValue(body, ['authRequest', 'AuthRequest']);
     const twoFactorToken = readBodyValue(body, ['twoFactorToken', 'TwoFactorToken']);
     const twoFactorProvider = readBodyValue(body, ['twoFactorProvider', 'TwoFactorProvider']);
     const twoFactorRemember = readBodyValue(body, ['twoFactorRemember', 'TwoFactorRemember']);
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
-    if (!email || !passwordHash) {
+    if (!email || (!passwordHash && !ssoLogin)) {
       // Bitwarden clients expect OAuth-style error fields.
       return identityErrorResponse('Email and password are required', 'invalid_request', 400);
     }
@@ -457,12 +467,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const user = await storage.getUser(email);
+    const user = ssoLogin ? ssoLogin.user : await storage.getUser(email);
     let validatedAuthRequestId: string | null = null;
     let authRequestLoginKey: string | null = null;
     let valid = false;
     const normalizedAuthRequestId = String(authRequestId || '').trim();
-    if (normalizedAuthRequestId) {
+    if (ssoLogin) {
+      valid = user!.status === 'active';
+    } else if (normalizedAuthRequestId) {
       // Auth-request grants carry an access code, not a password hash. Pay the
       // same KDF cost and perform the lookup even when the account is missing.
       await auth.performDummyPasswordWork(passwordHash);
@@ -509,6 +521,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         loginIdentifier,
         'Username or password is incorrect. Try again'
       );
+    }
+    // SSO_ONLY refuses password sign-in, after the password check so it reveals nothing. Admins keep it as
+    // the escape hatch against a broken IdP or an unlinked account.
+    if (!ssoLogin && isSsoOnly(env) && user.role !== 'admin') {
+      return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
     }
 
     // Optional 2FA: enabled by any supported per-user provider.
@@ -647,7 +664,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       }
     }
 
-    if (!normalizedAuthRequestId) {
+    if (ssoLogin && !(await redeemSsoLogin(env, ssoLogin))) {
+      return identityErrorResponse('Invalid code', 'invalid_grant', 400);
+    }
+    if (!normalizedAuthRequestId && !ssoLogin) {
       await auth.upgradePasswordVerifier(user, passwordHash);
     }
 

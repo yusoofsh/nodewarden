@@ -60,6 +60,20 @@ for (const path of ['/alive', '/api/alive']) {
   check(`GET ${path} returns a timestamp`, alive.status === 200 && typeof alive.json === 'string' && !Number.isNaN(Date.parse(alive.json)), `${alive.status} ${alive.text.slice(0, 60)}`);
 }
 
+// SSO is off unless SSO_ENABLED is set: its routes fall through to the authenticated router as before,
+// and the authorization_code grant stays unsupported.
+for (const [method, path] of [
+  ['GET', '/identity/sso/prevalidate'],
+  ['GET', '/identity/connect/authorize?client_id=mobile&state=s&code_challenge=c&code_challenge_method=S256'],
+  ['GET', '/identity/connect/oidc-signin?code=c&state=s'],
+  ['POST', '/api/organizations/domain/sso/verified'],
+]) {
+  const res = await call(method, path);
+  check(`${method} ${path.split('?')[0]} without SSO is 401 as before`, res.status === 401, `${res.status} ${res.text.slice(0, 100)}`);
+}
+const ssoGrant = await call('POST', '/identity/connect/token', { form: { grant_type: 'authorization_code', code: 'c', code_verifier: 'v', client_id: 'mobile' } });
+check('authorization_code grant without SSO stays unsupported', ssoGrant.status === 400 && ssoGrant.json?.error === 'unsupported_grant_type', `${ssoGrant.status} ${ssoGrant.text.slice(0, 100)}`);
+
 const reg = await register(email, 'hash-1');
 check('register', reg.status === 200, `${reg.status} ${reg.text}`);
 let session = await login(email, 'hash-1');
