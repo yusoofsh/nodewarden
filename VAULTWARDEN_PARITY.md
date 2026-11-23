@@ -22,12 +22,12 @@ its own `/api/admin/*` and web vault.
 | Vaultwarden file | Handled | Stub | Refused (405/501) | Unmatched |
 |---|---|---|---|---|
 | core/accounts.rs | 32 | 0 | 5 | 6 |
-| core/ciphers.rs | 32 | 0 | 0 | 27 |
+| core/ciphers.rs | 55 | 0 | 0 | 4 |
 | core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 0 | 0 | 0 | 4 |
 | core/folders.rs | 5 | 0 | 0 | 2 |
 | core/mod.rs | 8 | 0 | 0 | 1 |
-| core/organizations.rs | 40 | 0 | 0 | 29 |
+| core/organizations.rs | 41 | 0 | 0 | 28 |
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
@@ -39,7 +39,7 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 165, stub 0, refused 15, unmatched 80
+Total 260: handled 189, stub 0, refused 15, unmatched 56
 
 ## Not in the Vaultwarden route list
 
@@ -69,34 +69,11 @@ Total 260: handled 165, stub 0, refused 15, unmatched 80
 
 </details>
 
-<details><summary>core/ciphers.rs: unmatched (27)</summary>
+<details><summary>core/ciphers.rs: unmatched (4)</summary>
 
-- `DELETE /api/ciphers/<cipher_id>/admin`
-- `DELETE /api/ciphers/<cipher_id>/attachment/<attachment_id>/admin`
-- `DELETE /api/ciphers/admin`
-- `GET /api/ciphers/<cipher_id>/admin`
-- `GET /api/ciphers/<cipher_id>/attachment/<attachment_id>/admin`
-- `POST /api/ciphers/<cipher_id>/admin`
 - `POST /api/ciphers/<cipher_id>/attachment-admin`
-- `POST /api/ciphers/<cipher_id>/attachment/<attachment_id>/delete-admin`
 - `POST /api/ciphers/<cipher_id>/attachment/<attachment_id>/share`
-- `POST /api/ciphers/<cipher_id>/collections`
-- `POST /api/ciphers/<cipher_id>/collections-admin`
-- `POST /api/ciphers/<cipher_id>/collections_v2`
-- `POST /api/ciphers/<cipher_id>/delete-admin`
-- `POST /api/ciphers/admin`
-- `POST /api/ciphers/delete-admin`
 - `POST /api/ciphers/purge`
-- `PUT /api/ciphers/<cipher_id>/admin`
-- `PUT /api/ciphers/<cipher_id>/collections`
-- `PUT /api/ciphers/<cipher_id>/collections-admin`
-- `PUT /api/ciphers/<cipher_id>/collections_v2`
-- `PUT /api/ciphers/<cipher_id>/delete-admin`
-- `PUT /api/ciphers/<cipher_id>/restore-admin`
-- `PUT /api/ciphers/<cipher_id>/share`
-- `PUT /api/ciphers/delete-admin`
-- `PUT /api/ciphers/restore-admin`
-- `PUT /api/ciphers/share`
 
 </details>
 
@@ -122,10 +99,9 @@ Total 260: handled 165, stub 0, refused 15, unmatched 80
 
 </details>
 
-<details><summary>core/organizations.rs: unmatched (29)</summary>
+<details><summary>core/organizations.rs: unmatched (28)</summary>
 
 - `DELETE /api/organizations/<org_id>/collections`
-- `GET /api/ciphers/organization-details`
 - `GET /api/ciphers/organization-details/assigned`
 - `GET /api/organizations/<_org_id>/billing/vnext/self-host/metadata`
 - `GET /api/organizations/<_org_id>/billing/vnext/warnings`
@@ -218,7 +194,7 @@ Total 260: handled 165, stub 0, refused 15, unmatched 80
 
 ## Order of work
 
-1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Next: sharing an item to a collection (organization ciphers).
+1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Not yet: purging an organization vault, the legacy `attachment-admin` and attachment share uploads, and `organization-details/assigned`.
 2. Emergency access, which needs user public keys (done) and email.
 3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
 4. Duo, which needs a Duo account to test.

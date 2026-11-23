@@ -1,7 +1,10 @@
 import type { Env } from '../types';
+import { notifyUserVaultSync } from '../durable/notifications-hub';
 import { AuthService } from '../services/auth';
 import { StorageService } from '../services/storage';
 import { updateRevisionDate } from '../services/storage-revision-repo';
+import { listOrgCipherIds } from '../services/storage-org-cipher-repo';
+import { deleteAllAttachmentsForCiphers } from './attachments';
 import {
   type Collection,
   type CollectionAccess,
@@ -58,6 +61,16 @@ export async function touchUsers(db: D1Database, userIds: string[]): Promise<voi
 
 export async function touchOrganization(db: D1Database, organizationId: string): Promise<void> {
   await touchUsers(db, await listMemberUserIds(db, organizationId));
+}
+
+/**
+ * After an organization cipher changes: a new revision date for every member, so no cached sync
+ * survives (a member who just lost access included), and a vault sync push to each.
+ */
+export async function touchOrganizationVault(env: Env, organizationId: string, contextId: string | null): Promise<void> {
+  for (const userId of await listMemberUserIds(env.DB, organizationId)) {
+    notifyUserVaultSync(env, userId, await updateRevisionDate(env.DB, userId), contextId);
+  }
 }
 
 // POST /api/organizations
@@ -125,7 +138,7 @@ export async function handleUpdateOrganization(request: Request, env: Env, organ
 }
 
 // DELETE /api/organizations/{id}
-// Deleting cascades to members, collections and collection access.
+// Deleting cascades to members, collections, collection access and the organization's ciphers.
 export async function handleDeleteOrganization(
   request: Request,
   env: Env,
@@ -141,6 +154,8 @@ export async function handleDeleteOrganization(
   }
 
   const memberUserIds = await listMemberUserIds(env.DB, organizationId);
+  // The organization's ciphers and their attachment rows cascade; their files do not.
+  await deleteAllAttachmentsForCiphers(env, await listOrgCipherIds(env.DB, organizationId));
   await deleteOrganization(env.DB, organizationId);
   await touchUsers(env.DB, memberUserIds);
   return new Response(null, { status: 200 });

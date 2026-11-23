@@ -60,7 +60,8 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
       .prepare(
         'UPDATE users SET master_password_hash=?, key=?, private_key=?, public_key=?, user_key_id=?, security_stamp=?, updated_at=? ' +
         "WHERE id=? AND master_password_hash=? AND security_stamp=? AND status='active' " +
-        'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ?) = ? ' +
+        // Organization ciphers are encrypted with the organization key, so a rotation leaves them alone.
+        'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ? AND organization_id IS NULL) = ? ' +
         'AND (SELECT COUNT(*) FROM folders WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM sends WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM emergency_access WHERE grantor_id = ? AND status >= 2 AND key_encrypted IS NOT NULL) = ?'
@@ -118,7 +119,7 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
           "json_extract(value, '$.data') AS data, json_extract(value, '$.reprompt') AS reprompt, json_extract(value, '$.key') AS key, " +
           "json_extract(value, '$.updated_at') AS updated_at, json_extract(value, '$.archived_at') AS archived_at, " +
           "json_extract(value, '$.deleted_at') AS deleted_at FROM json_each(?)) AS j " +
-          'WHERE ciphers.id = j.id AND ciphers.user_id = ?' + guard
+          'WHERE ciphers.id = j.id AND ciphers.user_id = ? AND ciphers.organization_id IS NULL' + guard
         )
         .bind(chunk, user.id, ...guardArgs)
     );

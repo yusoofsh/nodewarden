@@ -85,6 +85,7 @@ export interface BackupPayload {
     group_members?: SqlRow[];
     collection_groups?: SqlRow[];
     organization_policies?: SqlRow[];
+    collection_ciphers?: SqlRow[];
     emergency_access?: SqlRow[];
   };
 }
@@ -300,6 +301,7 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     group_members: source.group_members as SqlRow[] | undefined,
     collection_groups: source.collection_groups as SqlRow[] | undefined,
     organization_policies: source.organization_policies as SqlRow[] | undefined,
+    collection_ciphers: source.collection_ciphers as SqlRow[] | undefined,
     emergency_access: source.emergency_access as SqlRow[] | undefined,
   };
 }
@@ -581,6 +583,26 @@ export function validateBackupPayloadContents(
     policyKeys.add(key);
   }
 
+  // Optional: archives made before organization ciphers have no organization_id and no links.
+  const cipherOrganizations = new Map<string, string>();
+  for (const row of cipherRows) {
+    const organizationId = row.organization_id == null ? '' : String(row.organization_id).trim();
+    if (!organizationId) continue;
+    if (!organizationIds.has(organizationId)) throw new Error('Backup archive contains a cipher for an unknown organization');
+    cipherOrganizations.set(String(row.id || '').trim(), organizationId);
+  }
+  const collectionCipherPairs = new Set<string>();
+  for (const row of ensureRowArray(payload.db.collection_ciphers || [], 'collection_ciphers')) {
+    const collectionId = String(row.collection_id || '').trim();
+    const cipherId = String(row.cipher_id || '').trim();
+    const pair = `${collectionId}/${cipherId}`;
+    const organizationId = cipherOrganizations.get(cipherId);
+    if (!organizationId || collectionOrganization.get(collectionId) !== organizationId || collectionCipherPairs.has(pair)) {
+      throw new Error('Backup archive contains an invalid collection cipher row');
+    }
+    collectionCipherPairs.add(pair);
+  }
+
   // Optional: archives made before emergency access existed have no such key.
   const emergencyAccessIds = new Set<string>();
   for (const row of ensureRowArray(payload.db.emergency_access || [], 'emergency_access')) {
@@ -613,14 +635,14 @@ export async function buildBackupArchive(
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
     organizationRows, memberRows, collectionRows, collectionMemberRows, groupRows, groupMemberRows, collectionGroupRows, policyRows,
-    emergencyAccessRows,
+    collectionCipherRows, emergencyAccessRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT user_id, revision_date FROM user_revisions ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at, organization_id FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, name, billing_email, private_key, public_key, created_at, updated_at FROM organizations ORDER BY created_at ASC, id ASC'),
@@ -631,6 +653,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT group_id, member_id FROM group_members ORDER BY group_id ASC, member_id ASC'),
     queryRows(env.DB, 'SELECT collection_id, group_id, read_only, hide_passwords, manage FROM collection_groups ORDER BY collection_id ASC, group_id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, type, enabled, data, updated_at FROM organization_policies ORDER BY organization_id ASC, type ASC'),
+    queryRows(env.DB, 'SELECT collection_id, cipher_id FROM collection_ciphers ORDER BY collection_id ASC, cipher_id ASC'),
     queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
@@ -668,6 +691,7 @@ export async function buildBackupArchive(
       group_members: groupMemberRows.length,
       collection_groups: collectionGroupRows.length,
       organization_policies: policyRows.length,
+      collection_ciphers: collectionCipherRows.length,
       emergency_access: emergencyAccessRows.length,
     },
     includes: {
@@ -700,6 +724,7 @@ export async function buildBackupArchive(
       group_members: groupMemberRows,
       collection_groups: collectionGroupRows,
       organization_policies: policyRows,
+      collection_ciphers: collectionCipherRows,
       emergency_access: emergencyAccessRows,
     }, null, BACKUP_JSON_INDENT)),
   };

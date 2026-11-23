@@ -1,4 +1,4 @@
-// Organizations, their members and collections. Organization-owned ciphers are not stored yet.
+// Organizations, their members and collections. Organization-owned ciphers live in storage-org-cipher-repo.ts.
 import { type GroupAccess, type GroupMember, insertGroupAccess, insertGroupMember } from './storage-organization-group-repo';
 
 export const MemberStatus = { Revoked: -1, Invited: 0, Accepted: 1, Confirmed: 2 } as const;
