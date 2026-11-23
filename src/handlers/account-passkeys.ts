@@ -558,7 +558,8 @@ export async function handleDeleteAllTwoFactorWebAuthn(request: Request, env: En
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(twoFactorWebAuthnResponse([]));
+  // Vaultwarden nests the state under webAuthn; the flat fields match the single-key delete.
+  return jsonResponse({ ...twoFactorWebAuthnResponse([]), webAuthn: { enabled: false, keys: [] } });
 }
 
 export async function handleGetAccountPasskeyAttestationOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {

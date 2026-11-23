@@ -231,7 +231,7 @@ test('two-factor webauthn/all removes every WebAuthn key after the master passwo
 
   const res = await call(c, 'owner', 'DELETE', '/api/two-factor/webauthn/all', { masterPasswordHash: PASSWORD });
   assert.equal(res.status, 200, JSON.stringify(res.json));
-  assert.deepEqual([res.json.enabled, res.json.keys], [false, []]);
+  assert.deepEqual([res.json.enabled, res.json.keys, res.json.webAuthn], [false, [], { enabled: false, keys: [] }]);
   assert.equal((await c.storage.getAccountPasskeyCredentialsByUserId(ID.owner, 'twoFactor')).length, 0);
   assert.equal((await c.storage.getAccountPasskeyCredentialsByUserId(ID.owner, 'login')).length, 1, 'login passkeys stay');
   assert.equal((await rows(c.db, 'SELECT COUNT(*) AS n FROM refresh_tokens WHERE user_id = ?', ID.owner))[0].n, 0);
