@@ -27,7 +27,7 @@ its own `/api/admin/*` and web vault.
 | core/events.rs | 0 | 0 | 0 | 4 |
 | core/folders.rs | 5 | 0 | 0 | 2 |
 | core/mod.rs | 8 | 0 | 0 | 1 |
-| core/organizations.rs | 14 | 0 | 0 | 55 |
+| core/organizations.rs | 25 | 0 | 0 | 44 |
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
@@ -39,7 +39,7 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 120, stub 0, refused 15, unmatched 125
+Total 260: handled 131, stub 0, refused 15, unmatched 114
 
 ## Not in the Vaultwarden route list
 
@@ -146,13 +146,11 @@ Total 260: handled 120, stub 0, refused 15, unmatched 125
 
 </details>
 
-<details><summary>core/organizations.rs: unmatched (55)</summary>
+<details><summary>core/organizations.rs: unmatched (44)</summary>
 
 - `DELETE /api/organizations/<org_id>/collections`
 - `DELETE /api/organizations/<org_id>/groups`
 - `DELETE /api/organizations/<org_id>/groups/<group_id>`
-- `DELETE /api/organizations/<org_id>/users`
-- `DELETE /api/organizations/<org_id>/users/<member_id>`
 - `GET /api/ciphers/organization-details`
 - `GET /api/ciphers/organization-details/assigned`
 - `GET /api/organizations/00000000-01DC-01DC-01DC-000000000000/policies/master-password`
@@ -172,7 +170,6 @@ Total 260: handled 120, stub 0, refused 15, unmatched 125
 - `GET /api/organizations/<org_id>/policies/master-password`
 - `GET /api/organizations/<org_id>/policies/token`
 - `GET /api/organizations/<org_id>/private-key`
-- `GET /api/organizations/<org_id>/users/<member_id>`
 - `GET /api/organizations/<org_id>/users/<member_id>/reset-password-details`
 - `GET /api/organizations/<org_id>/users/keys/pending-v2-upgrades`
 - `GET /api/organizations/<org_id>/users/mini-details`
@@ -184,18 +181,10 @@ Total 260: handled 120, stub 0, refused 15, unmatched 125
 - `POST /api/organizations/<org_id>/groups`
 - `POST /api/organizations/<org_id>/keys`
 - `POST /api/organizations/<org_id>/rotate-api-key`
-- `POST /api/organizations/<org_id>/users/<member_id>/accept`
-- `POST /api/organizations/<org_id>/users/<member_id>/confirm`
-- `POST /api/organizations/<org_id>/users/<member_id>/reinvite`
-- `POST /api/organizations/<org_id>/users/confirm`
-- `POST /api/organizations/<org_id>/users/invite`
 - `POST /api/organizations/<org_id>/users/keys/v2-upgrades`
-- `POST /api/organizations/<org_id>/users/public-keys`
-- `POST /api/organizations/<org_id>/users/reinvite`
 - `POST /api/organizations/domain/sso/verified`
 - `PUT /api/organizations/<org_id>/groups/<group_id>`
 - `PUT /api/organizations/<org_id>/policies/<pol_type>`
-- `PUT /api/organizations/<org_id>/users/<member_id>`
 - `PUT /api/organizations/<org_id>/users/<member_id>/recover-account`
 - `PUT /api/organizations/<org_id>/users/<member_id>/restore`
 - `PUT /api/organizations/<org_id>/users/<member_id>/restore/vnext`
@@ -268,7 +257,7 @@ Total 260: handled 120, stub 0, refused 15, unmatched 125
 
 ## Order of work
 
-1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Next: member invite, accept and confirm, then sharing an item to a collection (organization ciphers), groups and policies.
+1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Next: sharing an item to a collection (organization ciphers), groups and policies.
 2. Emergency access, which needs user public keys (done) and email.
 3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
 4. Duo, which needs a Duo account to test.

@@ -16,6 +16,19 @@ import {
   handleUpdateCollection,
   handleUpdateOrganization,
 } from './handlers/organizations';
+import {
+  handleAcceptInvite,
+  handleBulkConfirmMembers,
+  handleBulkDeleteMembers,
+  handleBulkReinviteMembers,
+  handleConfirmMember,
+  handleDeleteMember,
+  handleGetMember,
+  handleInviteMembers,
+  handleMemberPublicKeys,
+  handleReinviteMember,
+  handleUpdateMember,
+} from './handlers/organization-members';
 
 interface OrgRoute {
   method: string;
@@ -36,6 +49,16 @@ const ORG_ROUTES: OrgRoute[] = [
   { method: 'POST', sub: /^\/leave$/, role: 'member', handle: ({ env, member }) => handleLeaveOrganization(env, member) },
   { method: 'GET', sub: /^\/(?:public-key|keys)$/, role: 'member', handle: ({ env, orgId }) => handleGetOrganizationPublicKey(env, orgId) },
   { method: 'GET', sub: /^\/users$/, role: 'admin', handle: ({ request, env, orgId }) => handleGetOrganizationMembers(request, env, orgId) },
+  { method: 'POST', sub: /^\/users\/invite$/, role: 'admin', handle: ({ request, env, member }) => handleInviteMembers(request, env, member) },
+  { method: 'POST', sub: /^\/users\/reinvite$/, role: 'admin', handle: ({ request, env, member }) => handleBulkReinviteMembers(request, env, member) },
+  { method: 'POST', sub: /^\/users\/confirm$/, role: 'admin', handle: ({ request, env, member }) => handleBulkConfirmMembers(request, env, member) },
+  { method: 'POST', sub: /^\/users\/public-keys$/, role: 'admin', handle: ({ request, env, member }) => handleMemberPublicKeys(request, env, member) },
+  { method: 'DELETE', sub: /^\/users$/, role: 'admin', handle: ({ request, env, member }) => handleBulkDeleteMembers(request, env, member) },
+  { method: 'POST', sub: new RegExp(`^/users/${ID}/reinvite$`, 'i'), role: 'admin', handle: ({ env, member, params }) => handleReinviteMember(env, member, params[0]) },
+  { method: 'POST', sub: new RegExp(`^/users/${ID}/confirm$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleConfirmMember(request, env, member, params[0]) },
+  { method: 'GET', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleGetMember(request, env, member, params[0]) },
+  { method: 'PUT', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleUpdateMember(request, env, member, params[0]) },
+  { method: 'DELETE', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ env, member, params }) => handleDeleteMember(env, member, params[0]) },
   { method: 'GET', sub: /^\/collections$/, role: 'admin', handle: ({ env, orgId }) => handleGetOrganizationCollections(env, orgId) },
   { method: 'GET', sub: /^\/collections\/details$/, role: 'admin', handle: ({ env, member, orgId }) => handleGetOrganizationCollectionDetails(env, member, orgId) },
   { method: 'POST', sub: /^\/collections$/, role: 'admin', handle: ({ request, env, member, orgId }) => handleCreateCollection(request, env, member, orgId) },
@@ -44,6 +67,8 @@ const ORG_ROUTES: OrgRoute[] = [
 ];
 
 const ORG_PATH = new RegExp(`^/api/organizations/${ID}(/.*)?$`, 'i');
+// The invitee is not a confirmed member yet, so accepting is authorized by its own handler.
+const ACCEPT_PATH = new RegExp(`^/users/${ID}/accept$`, 'i');
 
 export async function handleOrganizationRoute(
   request: Request,
@@ -59,6 +84,8 @@ export async function handleOrganizationRoute(
   if (!match) return null;
   const orgId = match[1].toLowerCase();
   const sub = match[2] || '';
+  const accept = sub.match(ACCEPT_PATH);
+  if (accept && method === 'POST') return handleAcceptInvite(env, userId, orgId, accept[1].toLowerCase());
   for (const route of ORG_ROUTES) {
     if (route.method !== method) continue;
     const subMatch = sub.match(route.sub);

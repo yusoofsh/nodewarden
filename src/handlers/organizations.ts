@@ -8,7 +8,6 @@ import {
   type OrganizationMember,
   MemberStatus,
   MemberType,
-  countConfirmedOwners,
   createOrganization,
   deleteCollection,
   deleteMember,
@@ -23,7 +22,7 @@ import {
   saveCollection,
   updateOrganization,
 } from '../services/storage-organization-repo';
-import { isAdminOrOwner } from '../services/org-access';
+import { isAdminOrOwner, isLastConfirmedOwner } from '../services/org-access';
 import {
   collectionDetailsJson,
   collectionJson,
@@ -36,11 +35,11 @@ import { generateUUID } from '../utils/uuid';
 
 type Json = Record<string, unknown>;
 
-const isRecord = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
-const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-const list = (data: unknown[]) => jsonResponse({ data, object: 'list', continuationToken: null });
+export const isRecord = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
+export const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+export const list = (data: unknown[]) => jsonResponse({ data, object: 'list', continuationToken: null });
 
-async function readBody(request: Request): Promise<Json | null> {
+export async function readBody(request: Request): Promise<Json | null> {
   try {
     const body = await request.json();
     return isRecord(body) ? body : null;
@@ -50,7 +49,7 @@ async function readBody(request: Request): Promise<Json | null> {
 }
 
 // Sync responses are cached per revision date, so every member must see a new one.
-async function touchUsers(db: D1Database, userIds: string[]): Promise<void> {
+export async function touchUsers(db: D1Database, userIds: string[]): Promise<void> {
   for (const userId of userIds) await updateRevisionDate(db, userId);
 }
 
@@ -146,7 +145,7 @@ export async function handleDeleteOrganization(
 
 // POST /api/organizations/{id}/leave
 export async function handleLeaveOrganization(env: Env, member: OrganizationMember): Promise<Response> {
-  if (member.type === MemberType.Owner && (await countConfirmedOwners(env.DB, member.organizationId)) <= 1) {
+  if (await isLastConfirmedOwner(env.DB, member)) {
     return errorResponse("The last owner can't leave", 400);
   }
   await deleteMember(env.DB, member.id);

@@ -136,6 +136,16 @@ const MATRIX: Array<{ name: string; expect: Record<Actor, number>; run: (c: Ctx,
   { name: 'POST collection', expect: ADMINS, run: (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/collections`, { name: '2.new|a|b', users: [], groups: [] }) },
   { name: 'PUT collection', expect: ADMINS, run: (c, a) => call(c.env, a, 'PUT', `/api/organizations/${c.orgA}/collections/${c.collection}`, { name: '2.ren|a|b', users: [] }) },
   { name: 'DELETE collection', expect: ADMINS, run: (c, a) => call(c.env, a, 'DELETE', `/api/organizations/${c.orgA}/collections/${c.collection}`) },
+  { name: 'POST users/invite', expect: ADMINS, run: (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/invite`, { emails: ['outsider@example.test'], type: 2, collections: [], groups: [] }) },
+  { name: 'POST users/{id}/reinvite', expect: ADMINS, run: async (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/${await addMember(c.db, c.orgA, 'outsider', 2, 0)}/reinvite`) },
+  { name: 'POST users/reinvite', expect: ADMINS, run: (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/reinvite`, { ids: [c.memberId] }) },
+  { name: 'POST users/{id}/confirm', expect: ADMINS, run: async (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/${await addMember(c.db, c.orgA, 'outsider', 2, 1)}/confirm`, { key: '4.k' }) },
+  { name: 'POST users/confirm', expect: ADMINS, run: (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/confirm`, { keys: [{ id: c.memberId, key: '4.k' }] }) },
+  { name: 'GET users/{id}', expect: ADMINS, run: (c, a) => call(c.env, a, 'GET', `/api/organizations/${c.orgA}/users/${c.memberId}?includeCollections=true`) },
+  { name: 'PUT users/{id}', expect: ADMINS, run: (c, a) => call(c.env, a, 'PUT', `/api/organizations/${c.orgA}/users/${c.memberId}`, { type: 2, collections: [{ id: c.collection }], groups: [] }) },
+  { name: 'DELETE users/{id}', expect: ADMINS, run: (c, a) => call(c.env, a, 'DELETE', `/api/organizations/${c.orgA}/users/${c.memberId}`) },
+  { name: 'DELETE users', expect: ADMINS, run: (c, a) => call(c.env, a, 'DELETE', `/api/organizations/${c.orgA}/users`, { ids: [c.memberId] }) },
+  { name: 'POST users/public-keys', expect: ADMINS, run: (c, a) => call(c.env, a, 'POST', `/api/organizations/${c.orgA}/users/public-keys`, { ids: [c.memberId] }) },
 ];
 
 for (const route of MATRIX) {
@@ -342,6 +352,7 @@ const ORG_TABLES = {
 
 test('backup export and restore round-trip organizations', async () => {
   const c = await setup();
+  await call(c.env, 'owner', 'POST', `/api/organizations/${c.orgA}/users/invite`, { emails: ['outsider@example.test'], type: 2 });
   await call(c.env, 'owner', 'PUT', `/api/organizations/${c.orgA}/collections/${c.collection}`, {
     name: '2.c|a|b', users: [{ id: c.memberId, readOnly: true, hidePasswords: true, manage: false }],
   });
@@ -363,4 +374,151 @@ test('backup export and restore round-trip organizations', async () => {
   await importBackupArchiveBytes(zipSync(files), target.env, ID.owner, true);
   for (const sql of Object.values(ORG_TABLES)) assert.deepEqual(await rows(target.db, sql), []);
   assert.equal((await rows(target.db, 'SELECT * FROM users')).length, ACTORS.length);
+});
+
+const users = (c: Ctx) => `/api/organizations/${c.orgA}/users`;
+const memberRow = async (c: Ctx, actor: Actor) =>
+  (await rows(c.db, 'SELECT * FROM organization_members WHERE organization_id = ? AND user_id = ?', c.orgA, ID[actor]))[0];
+
+test('invite, accept and confirm an existing account', async () => {
+  const c = await setup();
+  const invited = await call(c.env, 'admin', 'POST', `${users(c)}/invite`, {
+    emails: [' Outsider@Example.test '], type: '2', collections: [{ id: c.collection, readOnly: true, hidePasswords: false, manage: false }], groups: [],
+  });
+  assert.equal(invited.status, 200, JSON.stringify(invited.json));
+  const row = await memberRow(c, 'outsider');
+  assert.deepEqual([row.status, row.type, row.access_all, row.akey], [0, 2, 0, '']);
+  const access = await rows(c.db, 'SELECT collection_id, read_only FROM collection_members WHERE member_id = ?', row.id);
+  assert.deepEqual(access.map((a: any) => [a.collection_id, a.read_only]), [[c.collection, 1]]);
+
+  // An invited member sees nothing of the organization yet.
+  assert.deepEqual((await call(c.env, 'outsider', 'GET', '/api/accounts/profile')).json.organizationsNew, []);
+  assert.equal((await call(c.env, 'outsider', 'GET', `/api/organizations/${c.orgA}/public-key`)).status, 404);
+  assert.equal((await call(c.env, 'owner', 'POST', `${users(c)}/${row.id}/reinvite`)).status, 200);
+
+  // Confirming needs an accepted member.
+  const early = await call(c.env, 'owner', 'POST', `${users(c)}/${row.id}/confirm`, { key: '4.k' });
+  assert.deepEqual([early.status, early.json.error], [400, 'User in invalid state']);
+
+  // Only the invited account can accept; anyone else gets the 404 of a missing organization.
+  for (const actor of ['member', 'owner', 'foreign'] as Actor[]) {
+    assert.equal((await call(c.env, actor, 'POST', `${users(c)}/${row.id}/accept`, { token: 'x' })).status, 404, actor);
+  }
+  assert.equal((await call(c.env, 'outsider', 'POST', `/api/organizations/${c.orgB}/users/${row.id}/accept`, { token: 'x' })).status, 404);
+  assert.equal((await call(c.env, 'outsider', 'POST', `${users(c)}/${row.id}/accept`, { token: 'x' })).status, 200);
+  const again = await call(c.env, 'outsider', 'POST', `${users(c)}/${row.id}/accept`, { token: 'x' });
+  assert.deepEqual([again.status, again.json.error], [400, 'User already accepted the invitation']);
+  assert.deepEqual((await call(c.env, 'outsider', 'GET', '/api/accounts/profile')).json.organizationsNew.map((o: any) => [o.id, o.status]), [[c.orgA, 1]]);
+  assert.equal((await call(c.env, 'outsider', 'GET', `/api/organizations/${c.orgA}/public-key`)).status, 404, 'accepted is not confirmed');
+  const reinvite = await call(c.env, 'owner', 'POST', `${users(c)}/${row.id}/reinvite`);
+  assert.deepEqual([reinvite.status, reinvite.json.error], [400, 'The user is already accepted or confirmed to the organization']);
+
+  // The admin wraps the organization key with the invitee's public key, then confirms.
+  const keys = await call(c.env, 'admin', 'POST', `${users(c)}/public-keys`, { ids: [row.id, c.foreignMemberId] });
+  assert.deepEqual(keys.json.data, [{ object: 'organizationUserPublicKeyResponseModel', id: row.id, userId: ID.outsider, key: 'pub-outsider' }]);
+  assert.equal((await call(c.env, 'admin', 'POST', `${users(c)}/${row.id}/confirm`, {})).status, 400);
+  assert.deepEqual((await call(c.env, 'outsider', 'GET', '/api/sync')).json.collections, []);
+  assert.equal((await call(c.env, 'admin', 'POST', `${users(c)}/${row.id}/confirm`, { key: '4.wrapped' })).status, 200);
+  assert.equal((await call(c.env, 'admin', 'POST', `${users(c)}/${row.id}/confirm`, { key: '4.other' })).status, 400, 'confirm is not repeatable');
+
+  const sync = await call(c.env, 'outsider', 'GET', '/api/sync');
+  assert.deepEqual(sync.json.profile.organizations.map((o: any) => [o.id, o.status, o.key, o.type]), [[c.orgA, 2, '4.wrapped', 2]]);
+  assert.deepEqual(sync.json.collections.map((col: any) => [col.id, col.readOnly]), [[c.collection, true]]);
+  assert.equal((await call(c.env, 'outsider', 'GET', `/api/organizations/${c.orgA}/public-key`)).status, 200);
+});
+
+test('bulk confirm reports each member', async () => {
+  const c = await setup();
+  const accepted = await addMember(c.db, c.orgA, 'outsider', 2, 1);
+  const res = await call(c.env, 'owner', 'POST', `${users(c)}/confirm`, {
+    keys: [{ id: accepted, key: '4.k' }, { id: c.memberId, key: '4.k' }, { id: c.foreignMemberId, key: '4.k' }],
+  });
+  assert.deepEqual(res.json.data.map((r: any) => [r.id, r.error]), [
+    [accepted, ''],
+    [c.memberId, 'User in invalid state'],
+    [c.foreignMemberId, "The specified user isn't a member of the organization"],
+  ]);
+  assert.equal((await rows(c.db, 'SELECT akey FROM organization_members WHERE id = ?', c.foreignMemberId))[0].akey, '4.bkey');
+});
+
+test('invites are checked before anything is written', async () => {
+  const c = await setup();
+  const before = (await rows(c.db, 'SELECT * FROM organization_members')).length;
+  const cases: Array<[Actor, unknown, string]> = [
+    ['owner', { emails: ['outsider@example.test', 'nobody@example.test'], type: 2 }, 'User does not exist: nobody@example.test'],
+    ['owner', { emails: ['outsider@example.test', 'member@example.test'], type: 2 }, 'User already in organization: member@example.test'],
+    ['owner', { emails: [], type: 2 }, 'At least one email is required'],
+    ['owner', { emails: ['outsider@example.test'], type: 4 }, 'Invalid type'],
+    ['owner', { emails: ['outsider@example.test'], type: 3 }, 'Invalid type'],
+    ['owner', { emails: ['outsider@example.test'], type: 2, collections: [{ id: c.collectionB }] }, 'Collection not found in Organization'],
+    ['owner', { emails: ['outsider@example.test'], type: 2, groups: ['g'] }, 'Invalid group'],
+    ['admin', { emails: ['outsider@example.test'], type: 0 }, 'Only Owners can manage Owners'],
+  ];
+  for (const [actor, body, error] of cases) {
+    const res = await call(c.env, actor, 'POST', `${users(c)}/invite`, body);
+    assert.deepEqual([res.status, res.json.error], [400, error], JSON.stringify(body));
+  }
+  assert.equal((await rows(c.db, 'SELECT * FROM organization_members')).length, before);
+
+  // Owners and admins get every collection, so their collection list is ignored.
+  assert.equal((await call(c.env, 'owner', 'POST', `${users(c)}/invite`, { emails: ['outsider@example.test'], type: 0, collections: [{ id: c.collection }] })).status, 200);
+  const row = await memberRow(c, 'outsider');
+  assert.deepEqual([row.type, row.access_all, row.status], [0, 1, 0]);
+  assert.equal((await rows(c.db, 'SELECT * FROM collection_members WHERE member_id = ?', row.id)).length, 0);
+});
+
+test('role and collection changes', async () => {
+  const c = await setup();
+  const owner = await ownerMemberId(c);
+  const put = (actor: Actor, id: string, body: unknown) => call(c.env, actor, 'PUT', `${users(c)}/${id}`, body);
+  const expectError = async (res: ReturnType<typeof call>, error: string) => {
+    const r = await res;
+    assert.deepEqual([r.status, r.json?.error], [400, error]);
+  };
+
+  await expectError(put('admin', owner, { type: 0 }), 'Only Owners can manage Owners');
+  await expectError(put('admin', c.memberId, { type: 0 }), 'Only Owners can manage Owners');
+  await expectError(put('owner', c.foreignMemberId, { type: 2 }), "The specified user isn't member of the organization");
+  await expectError(put('owner', c.memberId, { type: 2, collections: [{ id: c.collectionB }] }), 'Collection not found in Organization');
+  await expectError(put('owner', owner, { type: 1 }), "Can't delete the last owner");
+  await expectError(put('admin', c.adminMemberId, { type: 2 }), 'You cannot change your own role');
+
+  // Users get the collections in the request; promoting to admin grants all and drops them.
+  assert.equal((await put('admin', c.memberId, { type: 2, collections: [{ id: c.collection, hidePasswords: true }] })).status, 200);
+  assert.equal((await call(c.env, 'member', 'GET', '/api/sync')).json.collections[0].hidePasswords, true);
+  const detail = await call(c.env, 'admin', 'GET', `${users(c)}/${c.memberId}?includeCollections=true`);
+  assert.deepEqual([detail.json.object, detail.json.type, detail.json.collections], [
+    'organizationUserDetails', 2, [{ id: c.collection, readOnly: false, hidePasswords: true, manage: false }],
+  ]);
+  assert.equal((await call(c.env, 'admin', 'GET', `${users(c)}/${c.foreignMemberId}`)).status, 400);
+  assert.equal((await put('owner', c.memberId, { type: 1, collections: [{ id: c.collection }] })).status, 200);
+  const promoted = await memberRow(c, 'member');
+  assert.deepEqual([promoted.type, promoted.access_all], [1, 1]);
+  assert.equal((await rows(c.db, 'SELECT * FROM collection_members WHERE member_id = ?', c.memberId)).length, 0);
+
+  // With a second confirmed owner, an owner can be demoted, but never by themselves.
+  assert.equal((await put('owner', c.adminMemberId, { type: 0 })).status, 200);
+  await expectError(put('owner', owner, { type: 2 }), 'You cannot change your own role');
+  assert.equal((await put('admin', owner, { type: 2 })).status, 200, 'the promoted admin is an owner now');
+  const demoted = await memberRow(c, 'owner');
+  assert.deepEqual([demoted.type, demoted.access_all], [2, 0]);
+});
+
+test('removing members', async () => {
+  const c = await setup();
+  const owner = await ownerMemberId(c);
+  await call(c.env, 'owner', 'PUT', `/api/organizations/${c.orgA}/collections/${c.collection}`, { name: '2.c|a|b', users: [{ id: c.memberId }] });
+  assert.equal((await call(c.env, 'member', 'GET', '/api/sync')).json.profile.organizations.length, 1);
+
+  const self = await call(c.env, 'owner', 'DELETE', `${users(c)}/${owner}`);
+  assert.deepEqual([self.status, self.json.error], [400, 'You cannot remove yourself']);
+  assert.equal((await call(c.env, 'admin', 'DELETE', `${users(c)}/${owner}`)).json.error, 'Only Owners can manage Owners');
+  assert.equal((await call(c.env, 'owner', 'DELETE', `${users(c)}/${c.foreignMemberId}`)).status, 400);
+  assert.equal((await rows(c.db, 'SELECT * FROM organization_members WHERE id = ?', c.foreignMemberId)).length, 1);
+
+  const bulk = await call(c.env, 'admin', 'DELETE', users(c), { ids: [c.memberId, owner] });
+  assert.deepEqual(bulk.json.data.map((r: any) => [r.id, r.error]), [[c.memberId, ''], [owner, 'Only Owners can manage Owners']]);
+  assert.equal((await rows(c.db, 'SELECT * FROM collection_members')).length, 0);
+  const sync = await call(c.env, 'member', 'GET', '/api/sync');
+  assert.deepEqual([sync.json.profile.organizations, sync.json.collections], [[], []]);
 });

@@ -1,5 +1,5 @@
 import { errorResponse } from '../utils/response';
-import { getMember, MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
+import { countConfirmedOwners, getMember, MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
 
 export type OrgRole = 'member' | 'admin' | 'owner';
 
@@ -16,6 +16,19 @@ export async function getConfirmedMembership(
 export const isOwner = (member: OrganizationMember): boolean => member.type === MemberType.Owner;
 export const isAdminOrOwner = (member: OrganizationMember): boolean =>
   member.type === MemberType.Owner || member.type === MemberType.Admin;
+
+/** Why `caller` may not manage a member of `targetType`, or null when it may. Only owners manage owners. */
+export function roleManageError(caller: OrganizationMember, targetType: number): string | null {
+  if (isOwner(caller)) return null;
+  if (targetType === MemberType.Owner) return 'Only Owners can manage Owners';
+  return isAdminOrOwner(caller) ? null : 'You can only manage Users';
+}
+
+/** True when removing or demoting this member would leave the organization without a confirmed owner. */
+export async function isLastConfirmedOwner(db: D1Database, member: OrganizationMember): Promise<boolean> {
+  if (member.type !== MemberType.Owner || member.status !== MemberStatus.Confirmed) return false;
+  return (await countConfirmedOwners(db, member.organizationId)) <= 1;
+}
 
 const ROLE_CHECKS: Record<OrgRole, { allows: (member: OrganizationMember) => boolean; message: string }> = {
   member: { allows: () => true, message: '' },
