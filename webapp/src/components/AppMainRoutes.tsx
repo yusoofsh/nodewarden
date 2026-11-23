@@ -1,11 +1,12 @@
 import { lazy, Suspense } from 'preact/compat';
 import { useEffect } from 'preact/hooks';
 import { Link, Route, Switch } from 'wouter';
-import { ArrowUpDown, Cloud, FileClock, Globe2, LogOut, Settings as SettingsIcon, Shield, ShieldCheck, ShieldUser } from 'lucide-preact';
+import { ArrowUpDown, Building2, Cloud, FileClock, Globe2, LifeBuoy, LogOut, Settings as SettingsIcon, Shield, ShieldCheck, ShieldUser } from 'lucide-preact';
 import type { ImportAttachmentFile, ImportResultSummary } from '@/components/ImportPage';
 import LoadingState from '@/components/LoadingState';
 import type { AdminBackupImportResponse, AdminBackupRunResponse, AdminBackupSettings, RemoteBackupBrowserResponse } from '@/lib/api/backup';
 import type { AuditLogFilters } from '@/lib/api/admin';
+import type { AuthedFetch } from '@/lib/api/shared';
 import type { CiphersImportPayload } from '@/lib/api/vault';
 import { t } from '@/lib/i18n';
 import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, TwoFactorPasskeySettings, VaultDraft, YubiKeyOtpSettings } from '@/lib/types';
@@ -23,6 +24,8 @@ const AdminPage = lazy(() => import('@/components/AdminPage'));
 const LogCenterPage = lazy(() => import('@/components/LogCenterPage'));
 const BackupCenterPage = lazy(() => import('@/components/BackupCenterPage'));
 const ImportPage = lazy(() => import('@/components/ImportPage'));
+const OrganizationsPage = lazy(() => import('@/components/OrganizationsPage'));
+const EmergencyAccessPage = lazy(() => import('@/components/EmergencyAccessPage'));
 
 function RouteContentFallback() {
   return <LoadingState card lines={5} />;
@@ -39,6 +42,8 @@ export interface AppMainRoutesProps {
   profile: Profile | null;
   profileLoading: boolean;
   session: SessionState | null;
+  authedFetch: AuthedFetch;
+  deriveMasterPasswordHash: (masterPassword: string) => Promise<string>;
   mobileLayout: boolean;
   mobileSidebarToggleKey: number;
   themePreference: 'system' | 'light' | 'dark';
@@ -371,6 +376,14 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                   <Globe2 size={18} />
                   <span>{t('nav_domain_rules')}</span>
                 </Link>
+                <Link href="/organizations" className="mobile-settings-link">
+                  <Building2 size={18} />
+                  <span>{t('nav_organizations')}</span>
+                </Link>
+                <Link href="/emergency-access" className="mobile-settings-link">
+                  <LifeBuoy size={18} />
+                  <span>{t('nav_emergency_access')}</span>
+                </Link>
               </div>
             </div>
             {isAdmin && (
@@ -438,6 +451,42 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
           </div>
         </Route>
       ))}
+      <Route path="/organizations">
+        <div className="stack">
+          {props.mobileLayout && (
+            <div className="mobile-settings-subhead">
+              <button type="button" className="btn btn-secondary small mobile-settings-back" onClick={() => props.onNavigate(props.settingsHomeRoute)}>
+                <span className="btn-icon" aria-hidden="true">{"<"}</span>
+                {t('txt_back')}
+              </button>
+            </div>
+          )}
+          <Suspense fallback={<RouteContentFallback />}>
+            <OrganizationsPage
+              profile={props.profile}
+              session={props.session}
+              authedFetch={props.authedFetch}
+              onNotify={props.onNotify}
+              deriveMasterPasswordHash={props.deriveMasterPasswordHash}
+            />
+          </Suspense>
+        </div>
+      </Route>
+      <Route path="/emergency-access">
+        <div className="stack">
+          {props.mobileLayout && (
+            <div className="mobile-settings-subhead">
+              <button type="button" className="btn btn-secondary small mobile-settings-back" onClick={() => props.onNavigate(props.settingsHomeRoute)}>
+                <span className="btn-icon" aria-hidden="true">{"<"}</span>
+                {t('txt_back')}
+              </button>
+            </div>
+          )}
+          <Suspense fallback={<RouteContentFallback />}>
+            <EmergencyAccessPage profile={props.profile} session={props.session} authedFetch={props.authedFetch} onNotify={props.onNotify} />
+          </Suspense>
+        </div>
+      </Route>
       <Route path="/settings/domain-rules">
         <div className="stack domain-rules-route">
           {props.mobileLayout && (
