@@ -14,12 +14,15 @@ const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : [
 const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 const USER_KEY_ID = /^[0-9a-f]{32}$/;
+// RSA-wrapped keys are a single base64 part after the type, unlike symmetric EncStrings.
+const isWrappedKey = (value: string): boolean => /^\d+\.[^|\s]+$/.test(value);
 
 // POST /api/accounts/key-management/rotate-user-account-keys
 //
 // Re-keys an account with a v1 (AES-CBC-HMAC) user key: new master-key-wrapped user key,
 // new auth hash, the private key re-wrapped, and every cipher, folder and send
-// re-encrypted by the client. All of it is written in one transaction. Accounts with a
+// re-encrypted by the client. All of it is written in one transaction, including the
+// wrapped copies of the user key held for passkeys and trusted devices. Accounts with a
 // signature key pair or security state (v2) are refused rather than half rotated.
 export async function handleRotateUserAccountKeys(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -89,6 +92,29 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
   }
   if (newUserKeyId && !USER_KEY_ID.test(newUserKeyId)) {
     return errorResponse('newUserKeyId must be a 32-character lowercase hex string', 400);
+  }
+
+  // Copies of the user key wrapped for passkeys and trusted devices. Clients send the
+  // ones they can re-wrap. Any row left out has its wrapped key cleared, never kept.
+  const passkeys: Array<{ id: string; encryptedUserKey: string; encryptedPublicKey: string | null }> = [];
+  for (const item of asArray(unlockRoot.passkeyUnlockData)) {
+    if (!isRecord(item)) continue;
+    const encryptedUserKey = str(item.encryptedUserKey);
+    const encryptedPublicKey = str(item.encryptedPublicKey) || null;
+    if (!str(item.id) || !isWrappedKey(encryptedUserKey) || (encryptedPublicKey && !isValidEncString(encryptedPublicKey))) {
+      return errorResponse('Invalid passkey unlock data', 400);
+    }
+    passkeys.push({ id: str(item.id), encryptedUserKey, encryptedPublicKey });
+  }
+  const devices: Array<{ deviceIdentifier: string; encryptedUserKey: string; encryptedPublicKey: string | null }> = [];
+  for (const item of asArray(unlockRoot.deviceKeyUnlockData)) {
+    if (!isRecord(item)) continue;
+    const encryptedUserKey = str(item.encryptedUserKey);
+    const encryptedPublicKey = str(item.encryptedPublicKey) || null;
+    if (!str(item.deviceId) || !isWrappedKey(encryptedUserKey) || (encryptedPublicKey && !isValidEncString(encryptedPublicKey))) {
+      return errorResponse('Invalid device unlock data', 400);
+    }
+    devices.push({ deviceIdentifier: str(item.deviceId), encryptedUserKey, encryptedPublicKey });
   }
 
   const [existingCiphers, existingFolders, existingSends] = await Promise.all([
@@ -177,11 +203,14 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     user: nextUser,
     expectedPasswordVerifier: user.masterPasswordHash,
     expectedSecurityStamp: user.securityStamp,
+    expectedCounts: { ciphers: existingCiphers.length, folders: existingFolders.length, sends: existingSends.length },
     newPasswordVerifier: await auth.hashPasswordServer(newHash),
     ciphers,
     attachments,
     folders,
     sends,
+    passkeys,
+    devices,
     now,
   });
   AuthService.invalidateUserCache(user.id);

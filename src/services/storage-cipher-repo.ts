@@ -167,28 +167,23 @@ export async function updateCipherIfUnchanged(
   return result.meta.changes === 1;
 }
 
-// Unconditional UPDATE for callers that write many rows in one D1 batch.
-// `guard` makes the row change only while the user still has that security stamp.
-export function prepareCipherUpdate(
-  db: D1Database,
-  cipher: Cipher,
-  guard?: { stamp: string }
-): D1PreparedStatement {
+// Column values of a cipher row, for callers that write many rows in one statement.
+export function cipherRowValues(cipher: Cipher): Record<string, string | number | null> {
   const folderId = normalizeOptionalId(cipher.folderId);
-  const guarded = guard
-    ? ' AND EXISTS (SELECT 1 FROM users WHERE id = ciphers.user_id AND security_stamp = ?)'
-    : '';
-  return db
-    .prepare(
-      'UPDATE ciphers SET type=?, folder_id=?, name=?, notes=?, favorite=?, data=?, reprompt=?, key=?, updated_at=?, archived_at=?, deleted_at=? ' +
-      'WHERE id=? AND user_id=?' + guarded
-    )
-    .bind(
-      Number(cipher.type) || 1, folderId, cipher.name ?? null, cipher.notes ?? null, cipher.favorite ? 1 : 0,
-      buildCipherData(cipher, folderId), cipher.reprompt ?? 0, cipher.key ?? null, cipher.updatedAt,
-      cipher.archivedAt ?? null, cipher.deletedAt ?? null, cipher.id, cipher.userId,
-      ...(guard ? [guard.stamp] : [])
-    );
+  return {
+    id: cipher.id,
+    type: Number(cipher.type) || 1,
+    folder_id: folderId,
+    name: cipher.name ?? null,
+    notes: cipher.notes ?? null,
+    favorite: cipher.favorite ? 1 : 0,
+    data: buildCipherData(cipher, folderId),
+    reprompt: cipher.reprompt ?? 0,
+    key: cipher.key ?? null,
+    updated_at: cipher.updatedAt,
+    archived_at: cipher.archivedAt ?? null,
+    deleted_at: cipher.deletedAt ?? null,
+  };
 }
 
 function sanitizeIds(ids: string[]): string[] {
