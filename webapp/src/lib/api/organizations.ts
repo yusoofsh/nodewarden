@@ -130,6 +130,10 @@ export async function getMemberPublicKey(authedFetch: AuthedFetch, orgId: string
 export const confirmMember = (authedFetch: AuthedFetch, orgId: string, memberId: string, key: string) =>
   send(authedFetch, `${org(orgId)}/users/${encodeURIComponent(memberId)}/confirm`, 'POST', { key });
 
+/** Collections the caller can see, across organizations. */
+export const listMyCollections = (authedFetch: AuthedFetch) =>
+  getList<{ id: string; organizationId: string; name: string }>(authedFetch, '/api/collections');
+
 export const listCollectionDetails = (authedFetch: AuthedFetch, orgId: string) =>
   getList<CollectionDetails>(authedFetch, `${org(orgId)}/collections/details`);
 

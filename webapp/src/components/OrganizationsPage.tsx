@@ -22,6 +22,7 @@ import {
   listGroups,
   listInvitations,
   listMembers,
+  listMyCollections,
   listOrganizationCiphers,
   listPolicies,
   removeMember,
@@ -182,7 +183,14 @@ export default function OrganizationsPage(props: OrganizationsPageProps) {
       <section className="card">
         <div className="section-head">
           <h3>{t('nav_organizations')}</h3>
-          <button type="button" className="btn btn-secondary small" disabled={busy} onClick={() => void Promise.all([refreshProfile(), invitationsQuery.refetch()])}>
+          <button type="button" className="btn btn-secondary small" disabled={busy} onClick={() =>
+              void Promise.all([
+                refreshProfile(),
+                invitationsQuery.refetch(),
+                queryClient.invalidateQueries({ predicate: (query) => ['org-members', 'org-collections', 'org-groups', 'org-policies', 'org-items'].includes(String(query.queryKey[0])) }),
+              ])
+            }
+          >
             <RefreshCw size={14} className="btn-icon" /> {t('txt_refresh')}
           </button>
         </div>
@@ -300,7 +308,7 @@ function OrganizationDetail(props: DetailProps) {
   const { authedFetch, org, run, busy } = props;
   const isAdmin = org.type === OrgRole.Owner || org.type === OrgRole.Admin;
   const isOwner = org.type === OrgRole.Owner;
-  const [tab, setTab] = useState<Tab>(isAdmin ? 'members' : 'settings');
+  const [tab, setTab] = useState<Tab>(isAdmin ? 'members' : 'collections');
 
   const keyQuery = useQuery({
     queryKey: ['org-key', org.id, org.key],
@@ -311,20 +319,23 @@ function OrganizationDetail(props: DetailProps) {
   const orgKey = keyQuery.data ?? null;
 
   const membersQuery = useQuery({ queryKey: ['org-members', org.id], queryFn: () => listMembers(authedFetch, org.id), enabled: isAdmin });
+  // Admins get every collection with its access; other members only the ones assigned to them.
   const collectionsQuery = useQuery({
     queryKey: ['org-collections', org.id, !!orgKey],
-    queryFn: async () => {
-      const rows = await listCollectionDetails(authedFetch, org.id);
+    queryFn: async (): Promise<DecryptedCollection[]> => {
+      const rows = isAdmin
+        ? await listCollectionDetails(authedFetch, org.id)
+        : (await listMyCollections(authedFetch)).filter((c) => c.organizationId === org.id).map((c) => ({ ...c, users: [], groups: [] }));
       return Promise.all(rows.map(async (row) => ({ ...row, decName: orgKey ? await decryptText(row.name, orgKey) : '' })));
     },
-    enabled: isAdmin && !!orgKey,
+    enabled: !!orgKey,
   });
   const groupsQuery = useQuery({ queryKey: ['org-groups', org.id], queryFn: () => listGroups(authedFetch, org.id), enabled: isAdmin });
 
   const members = membersQuery.data ?? [];
   const collections = collectionsQuery.data ?? [];
   const groups = groupsQuery.data ?? [];
-  const refetchAll = () => Promise.all([membersQuery.refetch(), collectionsQuery.refetch(), groupsQuery.refetch()]);
+  const refetchAll = () => Promise.all([collectionsQuery.refetch(), ...(isAdmin ? [membersQuery.refetch(), groupsQuery.refetch()] : [])]);
 
   const tabs: Array<{ id: Tab; label: string }> = isAdmin
     ? [
@@ -335,7 +346,10 @@ function OrganizationDetail(props: DetailProps) {
         { id: 'items', label: t('txt_org_items') },
         { id: 'settings', label: t('txt_settings') },
       ]
-    : [{ id: 'settings', label: t('txt_settings') }];
+    : [
+        { id: 'collections', label: t('txt_org_collections') },
+        { id: 'settings', label: t('txt_settings') },
+      ];
 
   return (
     <section className="card">
@@ -355,7 +369,7 @@ function OrganizationDetail(props: DetailProps) {
       {tab === 'members' && orgKey && (
         <MembersTab {...props} orgKey={orgKey} isOwner={isOwner} members={members} collections={collections} onChanged={refetchAll} busy={busy} />
       )}
-      {tab === 'collections' && orgKey && <CollectionsTab {...props} orgKey={orgKey} collections={collections} onChanged={refetchAll} />}
+      {tab === 'collections' && orgKey && <CollectionsTab {...props} orgKey={orgKey} isAdmin={isAdmin} collections={collections} onChanged={refetchAll} />}
       {tab === 'groups' && <GroupsTab {...props} groups={groups} members={members} collections={collections} onChanged={refetchAll} />}
       {tab === 'policies' && <PoliciesTab {...props} />}
       {tab === 'items' && orgKey && <ItemsTab {...props} orgKey={orgKey} collections={collections} />}
@@ -525,7 +539,7 @@ function MembersTab(
   );
 }
 
-function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; collections: DecryptedCollection[]; onChanged: () => Promise<unknown> }) {
+function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; isAdmin: boolean; collections: DecryptedCollection[]; onChanged: () => Promise<unknown> }) {
   const { authedFetch, org, run, busy } = props;
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState('');
@@ -555,18 +569,18 @@ function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; collections
 
   return (
     <div className="stack">
-      <form className="actions" onSubmit={(event) => void handleCreate(event)}>
+      {props.isAdmin && <form className="actions" onSubmit={(event) => void handleCreate(event)}>
         <input className="input" required placeholder={t('txt_org_collection_name')} value={newName} onInput={(event) => setNewName(readValue(event))} />
         <button type="submit" className="btn btn-primary" disabled={busy || !newName.trim()}>
           <Plus size={14} className="btn-icon" /> {t('txt_org_add_collection')}
         </button>
-      </form>
+      </form>}
       <table className="table">
         <thead>
           <tr>
             <th>{t('txt_name')}</th>
-            <th>{t('txt_org_access')}</th>
-            <th>{t('txt_actions')}</th>
+            {props.isAdmin && <th>{t('txt_org_access')}</th>}
+            {props.isAdmin && <th>{t('txt_actions')}</th>}
           </tr>
         </thead>
         <tbody>
@@ -579,8 +593,8 @@ function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; collections
                   collection.decName || t('txt_org_undecryptable')
                 )}
               </td>
-              <td data-label={t('txt_org_access')}>{t('txt_org_access_summary', { users: collection.users.length, groups: collection.groups.length })}</td>
-              <td data-label={t('txt_actions')}>
+              {props.isAdmin && <td data-label={t('txt_org_access')}>{t('txt_org_access_summary', { users: collection.users.length, groups: collection.groups.length })}</td>}
+              {props.isAdmin && <td data-label={t('txt_actions')}>
                 <div className="actions">
                   {editingId === collection.id ? (
                     <>
@@ -618,7 +632,7 @@ function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; collections
                     <Trash2 size={14} className="btn-icon" /> {t('txt_delete')}
                   </button>
                 </div>
-              </td>
+              </td>}
             </tr>
           ))}
           {!props.collections.length && (

@@ -123,6 +123,8 @@ const APP_ROUTE_PATHS = [
   '/settings',
   SETTINGS_ACCOUNT_ROUTE,
   SETTINGS_DOMAIN_RULES_ROUTE,
+  '/organizations',
+  '/emergency-access',
   '/help',
   ...IMPORT_ROUTE_PATHS,
 ] as const;
