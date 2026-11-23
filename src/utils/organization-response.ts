@@ -1,5 +1,7 @@
-// JSON shapes for organizations, members and collections, as Vaultwarden returns them.
-// Events, groups and account recovery are not offered, so their flags are false.
+// JSON shapes for organizations, members, collections, groups and policies, as Vaultwarden returns them.
+// Events and account recovery are not offered, so their flags are false.
+import type { Group, GroupAccess } from '../services/storage-organization-group-repo';
+import type { Policy } from '../services/storage-organization-policy-repo';
 import {
   MemberStatus,
   MemberType,
@@ -41,7 +43,7 @@ export function organizationJson(org: Organization) {
     useCustomPermissions: false,
     useDirectory: false,
     useEvents: false,
-    useGroups: false,
+    useGroups: true,
     useTotp: true,
     usePolicies: true,
     useScim: false,
@@ -94,7 +96,7 @@ export function profileOrganizationJson(member: OrganizationMember, org: Organiz
     use2fa: true,
     useDirectory: false,
     useEvents: false,
-    useGroups: false,
+    useGroups: true,
     useTotp: true,
     useScim: false,
     usePolicies: true,
@@ -188,7 +190,7 @@ export function collectionMemberAccessJson(access: CollectionAccess, memberType:
 }
 
 /** A member as admins see it in the member list (Vaultwarden's Membership::to_json_details_for_admin). */
-export function memberDetailsJson(member: MemberWithUser, collections: CollectionAccess[] | null) {
+export function memberDetailsJson(member: MemberWithUser, collections: CollectionAccess[] | null, groupIds: string[] = []) {
   return {
     id: member.id,
     userId: member.userId,
@@ -196,7 +198,7 @@ export function memberDetailsJson(member: MemberWithUser, collections: Collectio
     email: member.email,
     externalId: null,
     avatarColor: null,
-    groups: [],
+    groups: groupIds,
     collections:
       collections && !member.accessAll
         ? collections.map((c) => ({ id: c.collectionId, readOnly: c.readOnly, hidePasswords: c.hidePasswords, manage: c.manage }))
@@ -212,5 +214,45 @@ export function memberDetailsJson(member: MemberWithUser, collections: Collectio
     usesKeyConnector: false,
     accessSecretsManager: false,
     object: 'organizationUserUserDetails',
+  };
+}
+
+/** One entry of a collection's `groups` list, or of a group's `collections` list (keyed by `id`). */
+export function groupAccessJson(access: GroupAccess) {
+  return { id: access.groupId, readOnly: access.readOnly, hidePasswords: access.hidePasswords, manage: access.manage };
+}
+
+export function groupJson(group: Group) {
+  return { id: group.id, organizationId: group.organizationId, name: group.name, externalId: group.externalId, object: 'group' };
+}
+
+/** A group with its collection access (Vaultwarden's Group::to_json_details). */
+export function groupDetailsJson(group: Group, access: GroupAccess[]) {
+  return {
+    ...groupJson(group),
+    collections: access.map((a) => ({ id: a.collectionId, readOnly: a.readOnly, hidePasswords: a.hidePasswords, manage: a.manage })),
+    object: 'groupDetails',
+  };
+}
+
+const RESET_PASSWORD_POLICY = 8;
+
+/** Vaultwarden's OrgPolicy::to_json. */
+export function policyJson(policy: Policy) {
+  let data: unknown = null;
+  try {
+    data = JSON.parse(policy.data);
+  } catch {
+    data = null;
+  }
+  return {
+    id: policy.id,
+    organizationId: policy.organizationId,
+    type: policy.type,
+    data,
+    enabled: policy.enabled,
+    revisionDate: policy.updatedAt,
+    object: 'policy',
+    ...(policy.type === RESET_PASSWORD_POLICY ? { canToggleState: true } : {}),
   };
 }

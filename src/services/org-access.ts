@@ -1,5 +1,5 @@
 import { errorResponse } from '../utils/response';
-import { countConfirmedOwners, getMember, getMemberById,MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
+import { countConfirmedOwners, getMember, getMemberById, MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
 
 export type OrgRole = 'member' | 'admin' | 'owner';
 
@@ -30,6 +30,19 @@ export async function authorizeOwnMembership(
 ): Promise<OrganizationMember | Response> {
   const member = await getMemberById(db, organizationId, memberId);
   return member && member.userId === userId ? member : errorResponse('Organization not found', 404);
+}
+
+/**
+ * The caller's own membership in any state but revoked, else the 404 of a missing organization.
+ * It authorizes the policy routes an invitee reads before accepting, which reveal nothing else.
+ */
+export async function authorizeInvitee(
+  db: D1Database,
+  organizationId: string,
+  userId: string
+): Promise<OrganizationMember | Response> {
+  const member = await getMember(db, organizationId, userId);
+  return member && member.status >= MemberStatus.Invited ? member : errorResponse('Organization not found', 404);
 }
 
 /** Why `caller` may not manage a member of `targetType`, or null when it may. Only owners manage owners. */

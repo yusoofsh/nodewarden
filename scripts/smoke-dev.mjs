@@ -189,6 +189,13 @@ const inviteMember = await call('POST', `${teamPath}/users/invite`, { token, bod
 check('invite an existing account', inviteMember.status === 200, `${inviteMember.status} ${inviteMember.text}`);
 const invitedRow = (await call('GET', `${teamPath}/users`, { token })).json?.data?.find((m) => m.email === email2.toLowerCase());
 check('the invitee is listed as invited', invitedRow?.status === 0, JSON.stringify(invitedRow));
+const pendingInvites = await call('GET', '/api/organizations/invitations', { token: secondToken });
+check('the invitee finds the invite to accept', pendingInvites.json?.data?.some((i) => i.id === invitedRow?.id && i.organizationId === teamOrg.json?.id), pendingInvites.text);
+const passwordPolicy = await call('PUT', `${teamPath}/policies/1`, { token, body: { policy: { enabled: true, data: { minLength: 14 } } } });
+check('store a master password policy', passwordPolicy.status === 200 && passwordPolicy.json?.enabled === true && passwordPolicy.json?.data?.minLength === 14, passwordPolicy.text);
+const tokenPolicies = await call('GET', `${teamPath}/policies/token?token=x&organizationUserId=${invitedRow?.id}`, { token: secondToken });
+check('the invitee reads the policies', tokenPolicies.json?.data?.[0]?.type === 1, `${tokenPolicies.status} ${tokenPolicies.text}`);
+check('the invitee reads no admin policy route', (await call('GET', `${teamPath}/policies`, { token: secondToken })).status === 404);
 check('the owner cannot accept for the invitee', (await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token, body: { token: 'x' } })).status === 404);
 const accepted = await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token: secondToken, body: { token: 'x' } });
 check('the invitee accepts', accepted.status === 200, `${accepted.status} ${accepted.text}`);
@@ -198,6 +205,21 @@ const confirmed = await call('POST', `${teamPath}/users/${invitedRow?.id}/confir
 check('confirm the member', confirmed.status === 200, `${confirmed.status} ${confirmed.text}`);
 const memberSync = await call('GET', '/api/sync', { token: secondToken });
 check('the member syncs the organization', memberSync.json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id && o.status === 2), memberSync.text.slice(0, 300));
+check('the member syncs its policies', memberSync.json?.policies?.some((p) => p.organizationId === teamOrg.json?.id && p.type === 1), JSON.stringify(memberSync.json?.policies));
+const teamCollections = (body) => (body?.collections || []).filter((c) => c.organizationId === teamOrg.json?.id);
+check('the member sees no team collection yet', teamCollections(memberSync.json).length === 0, JSON.stringify(memberSync.json?.collections));
+const teamCollection = (await call('GET', `${teamPath}/collections`, { token })).json?.data?.[0];
+const group = await call('POST', `${teamPath}/groups`, {
+  token, body: { name: 'Readers', collections: [{ id: teamCollection?.id, readOnly: true, hidePasswords: false, manage: false }], users: [invitedRow?.id] },
+});
+check('create a group', group.status === 200 && group.json?.object === 'group', `${group.status} ${group.text}`);
+const groupDetails = await call('GET', `${teamPath}/groups/details`, { token });
+check('group details list its collection', groupDetails.json?.data?.[0]?.collections?.[0]?.id === teamCollection?.id, groupDetails.text);
+check('group members', JSON.stringify((await call('GET', `${teamPath}/groups/${group.json?.id}/users`, { token })).json) === JSON.stringify([invitedRow?.id]));
+const groupSync = await call('GET', '/api/sync', { token: secondToken });
+check('the group gives the member its collection', teamCollections(groupSync.json).length === 1 && teamCollections(groupSync.json)[0].readOnly === true, JSON.stringify(groupSync.json?.collections));
+check('delete the group', (await call('DELETE', `${teamPath}/groups/${group.json?.id}`, { token })).status === 200);
+check('the member loses the collection', teamCollections((await call('GET', '/api/sync', { token: secondToken })).json).length === 0);
 check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
 check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
 await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });

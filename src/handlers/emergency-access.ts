@@ -20,6 +20,9 @@ import { cipherToResponse, isCipherResponseSyncCompatible, isValidEncString } fr
 import { handleGetAttachment } from './attachments';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { policyJson } from '../utils/organization-response';
+import { MemberStatus } from '../services/storage-organization-repo';
+import { listPoliciesForUser } from '../services/storage-organization-policy-repo';
 
 // Vaultwarden's emergency_access.rs, with mail disabled: this server sends no email.
 // - Inviting an existing account accepts the invite at once, like Vaultwarden does
@@ -215,8 +218,9 @@ export async function handleEmergencyAccessRoute(
       const found = await findEmergencyAccess(db, id, user.id, ['grantee']);
       if (!found) return notFound();
       if (!isValidRequest(found.access, Type.Takeover)) return errorResponse(NOT_VALID, 400);
-      // No organizations, so no policies apply to the grantor.
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
+      // As in Vaultwarden: the policies of the grantor's confirmed memberships.
+      const policies = await listPoliciesForUser(db, found.access.grantorId, [MemberStatus.Confirmed]);
+      return jsonResponse({ data: policies.map(policyJson), object: 'list', continuationToken: null });
     }
   }
   return null;
