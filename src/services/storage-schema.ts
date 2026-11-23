@@ -166,6 +166,29 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope ON webauthn_challenges(user_id, scope)',
 
+  'CREATE TABLE IF NOT EXISTS organizations (' +
+  'id TEXT PRIMARY KEY, name TEXT NOT NULL, billing_email TEXT NOT NULL, private_key TEXT, public_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+
+  'CREATE TABLE IF NOT EXISTS organization_members (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, akey TEXT NOT NULL DEFAULT \'\', status INTEGER NOT NULL, type INTEGER NOT NULL, ' +
+  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'UNIQUE (organization_id, user_id), ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members(user_id)',
+
+  'CREATE TABLE IF NOT EXISTS collections (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collections_organization ON collections(organization_id)',
+
+  'CREATE TABLE IF NOT EXISTS collection_members (' +
+  'collection_id TEXT NOT NULL, member_id TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, hide_passwords INTEGER NOT NULL DEFAULT 0, manage INTEGER NOT NULL DEFAULT 0, ' +
+  'PRIMARY KEY (collection_id, member_id), ' +
+  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collection_members_member ON collection_members(member_id)',
+
   'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
   'ip TEXT PRIMARY KEY, attempts INTEGER NOT NULL, locked_until INTEGER, updated_at INTEGER NOT NULL)',
 

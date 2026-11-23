@@ -85,6 +85,7 @@ import {
   handleRotateSecurityStamp,
 } from './handlers/account-compat';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
+import { handleOrganizationRoute } from './router-organizations';
 import { handleAdminRoute } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
@@ -443,19 +444,8 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Method not allowed', 405);
   }
 
-  if (path === '/api/collections' || path.startsWith('/api/collections/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
-  }
-
-  if (path === '/api/organizations' || path.startsWith('/api/organizations/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
-  }
+  const organizationResponse = await handleOrganizationRoute(request, env, userId, path, method);
+  if (organizationResponse) return organizationResponse;
 
   if (path === '/api/sends') {
     if (method === 'GET') return handleGetSends(request, env, userId);

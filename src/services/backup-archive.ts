@@ -73,6 +73,10 @@ export interface BackupPayload {
     ciphers: SqlRow[];
     attachments: SqlRow[];
     webauthn_credentials?: SqlRow[];
+    organizations?: SqlRow[];
+    organization_members?: SqlRow[];
+    collections?: SqlRow[];
+    collection_members?: SqlRow[];
   };
 }
 
@@ -279,6 +283,10 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     ciphers: source.ciphers as SqlRow[],
     attachments: source.attachments as SqlRow[],
     webauthn_credentials: source.webauthn_credentials as SqlRow[] | undefined,
+    organizations: source.organizations as SqlRow[] | undefined,
+    organization_members: source.organization_members as SqlRow[] | undefined,
+    collections: source.collections as SqlRow[] | undefined,
+    collection_members: source.collection_members as SqlRow[] | undefined,
   };
 }
 
@@ -383,6 +391,10 @@ export function validateBackupPayloadContents(
   const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
   const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
   const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
+  const organizationRows = ensureRowArray(payload.db.organizations || [], 'organizations');
+  const memberRows = ensureRowArray(payload.db.organization_members || [], 'organization_members');
+  const collectionRows = ensureRowArray(payload.db.collections || [], 'collections');
+  const collectionMemberRows = ensureRowArray(payload.db.collection_members || [], 'collection_members');
   const externalAttachmentKeys = new Set<string>(
     options.allowExternalAttachmentBlobs
       ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
@@ -473,6 +485,48 @@ export function validateBackupPayloadContents(
     accountPasskeyCredentialIds.add(credentialId);
   }
 
+  const organizationIds = new Set<string>();
+  for (const row of organizationRows) {
+    const id = String(row.id || '').trim();
+    if (!id || organizationIds.has(id)) throw new Error('Backup archive contains an invalid organization row');
+    organizationIds.add(id);
+  }
+
+  const memberIds = new Set<string>();
+  const memberPairs = new Set<string>();
+  for (const row of memberRows) {
+    const id = String(row.id || '').trim();
+    const pair = `${String(row.organization_id || '').trim()}/${String(row.user_id || '').trim()}`;
+    if (
+      !id || memberIds.has(id) || memberPairs.has(pair) ||
+      !organizationIds.has(String(row.organization_id || '').trim()) || !userIds.has(String(row.user_id || '').trim())
+    ) {
+      throw new Error('Backup archive contains an invalid organization member row');
+    }
+    memberIds.add(id);
+    memberPairs.add(pair);
+  }
+
+  const collectionIds = new Set<string>();
+  for (const row of collectionRows) {
+    const id = String(row.id || '').trim();
+    if (!id || collectionIds.has(id) || !organizationIds.has(String(row.organization_id || '').trim())) {
+      throw new Error('Backup archive contains an invalid collection row');
+    }
+    collectionIds.add(id);
+  }
+
+  const collectionMemberPairs = new Set<string>();
+  for (const row of collectionMemberRows) {
+    const collectionId = String(row.collection_id || '').trim();
+    const memberId = String(row.member_id || '').trim();
+    const pair = `${collectionId}/${memberId}`;
+    if (!collectionIds.has(collectionId) || !memberIds.has(memberId) || collectionMemberPairs.has(pair)) {
+      throw new Error('Backup archive contains an invalid collection member row');
+    }
+    collectionMemberPairs.add(pair);
+  }
+
 }
 
 export async function buildBackupArchive(
@@ -491,7 +545,10 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const encoder = new TextEncoder();
-  const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows] = await Promise.all([
+  const [
+    configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
+    organizationRows, memberRows, collectionRows, collectionMemberRows,
+  ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
@@ -500,6 +557,10 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, name, billing_email, private_key, public_key, created_at, updated_at FROM organizations ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
@@ -528,6 +589,10 @@ export async function buildBackupArchive(
       ciphers: cipherRows.length,
       attachments: exportedAttachmentRows.length,
       webauthn_credentials: accountPasskeyRows.length,
+      organizations: organizationRows.length,
+      organization_members: memberRows.length,
+      collections: collectionRows.length,
+      collection_members: collectionMemberRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -551,6 +616,10 @@ export async function buildBackupArchive(
       ciphers: cipherRows,
       attachments: exportedAttachmentRows,
       webauthn_credentials: accountPasskeyRows,
+      organizations: organizationRows,
+      organization_members: memberRows,
+      collections: collectionRows,
+      collection_members: collectionMemberRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 
