@@ -11,8 +11,9 @@ import {
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
-import { collectionDetailsJson } from '../utils/organization-response';
-import { listCollectionsForUser, listProfileMemberships } from '../services/storage-organization-repo';
+import { collectionDetailsJson, policyJson } from '../utils/organization-response';
+import { listCollectionsForUser, listProfileMemberships, MemberStatus } from '../services/storage-organization-repo';
+import { listPoliciesForUser } from '../services/storage-organization-policy-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -136,8 +137,9 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
           domainSettings?.excludedGlobalEquivalentDomains || [],
           { omitExcludedGlobals: true }
         ),
-    policies: [],
-    policiesNew: [],
+    // As in Vaultwarden: policies of confirmed memberships, and of accepted ones too in policiesNew.
+    policies: (await listPoliciesForUser(env.DB, userId, [MemberStatus.Confirmed])).map(policyJson),
+    policiesNew: (await listPoliciesForUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed])).map(policyJson),
     sends: sendResponses,
     UserDecryption: {
       MasterPasswordUnlock: userDecryptionOptions.MasterPasswordUnlock,

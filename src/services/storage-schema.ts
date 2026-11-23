@@ -189,6 +189,29 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_collection_members_member ON collection_members(member_id)',
 
+  'CREATE TABLE IF NOT EXISTS organization_groups (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_organization_groups_organization ON organization_groups(organization_id)',
+
+  'CREATE TABLE IF NOT EXISTS group_members (' +
+  'group_id TEXT NOT NULL, member_id TEXT NOT NULL, PRIMARY KEY (group_id, member_id), ' +
+  'FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_group_members_member ON group_members(member_id)',
+
+  'CREATE TABLE IF NOT EXISTS collection_groups (' +
+  'collection_id TEXT NOT NULL, group_id TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, hide_passwords INTEGER NOT NULL DEFAULT 0, manage INTEGER NOT NULL DEFAULT 0, ' +
+  'PRIMARY KEY (collection_id, group_id), ' +
+  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collection_groups_group ON collection_groups(group_id)',
+
+  'CREATE TABLE IF NOT EXISTS organization_policies (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, type INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT \'null\', updated_at TEXT NOT NULL, ' +
+  'UNIQUE (organization_id, type), ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+
   'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
   'ip TEXT PRIMARY KEY, attempts INTEGER NOT NULL, locked_until INTEGER, updated_at INTEGER NOT NULL)',
 

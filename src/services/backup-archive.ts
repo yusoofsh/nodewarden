@@ -81,6 +81,10 @@ export interface BackupPayload {
     organization_members?: SqlRow[];
     collections?: SqlRow[];
     collection_members?: SqlRow[];
+    organization_groups?: SqlRow[];
+    group_members?: SqlRow[];
+    collection_groups?: SqlRow[];
+    organization_policies?: SqlRow[];
     emergency_access?: SqlRow[];
   };
 }
@@ -292,6 +296,10 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     organization_members: source.organization_members as SqlRow[] | undefined,
     collections: source.collections as SqlRow[] | undefined,
     collection_members: source.collection_members as SqlRow[] | undefined,
+    organization_groups: source.organization_groups as SqlRow[] | undefined,
+    group_members: source.group_members as SqlRow[] | undefined,
+    collection_groups: source.collection_groups as SqlRow[] | undefined,
+    organization_policies: source.organization_policies as SqlRow[] | undefined,
     emergency_access: source.emergency_access as SqlRow[] | undefined,
   };
 }
@@ -533,6 +541,46 @@ export function validateBackupPayloadContents(
     collectionMemberPairs.add(pair);
   }
 
+  // Optional: archives made before groups and policies existed have no such keys.
+  // A group's members and collections must belong to the group's organization.
+  const groupOrganization = new Map<string, string>();
+  for (const row of ensureRowArray(payload.db.organization_groups || [], 'organization_groups')) {
+    const id = String(row.id || '').trim();
+    const organizationId = String(row.organization_id || '').trim();
+    if (!id || groupOrganization.has(id) || !organizationIds.has(organizationId)) {
+      throw new Error('Backup archive contains an invalid organization group row');
+    }
+    groupOrganization.set(id, organizationId);
+  }
+  const memberOrganization = new Map(memberRows.map((row) => [String(row.id || '').trim(), String(row.organization_id || '').trim()]));
+  const collectionOrganization = new Map(collectionRows.map((row) => [String(row.id || '').trim(), String(row.organization_id || '').trim()]));
+  const groupLinkPairs = new Set<string>();
+  for (const [table, owners, column] of [
+    ['group_members', memberOrganization, 'member_id'],
+    ['collection_groups', collectionOrganization, 'collection_id'],
+  ] as const) {
+    for (const row of ensureRowArray(payload.db[table] || [], table)) {
+      const groupId = String(row.group_id || '').trim();
+      const otherId = String(row[column] || '').trim();
+      const pair = `${table}/${groupId}/${otherId}`;
+      if (!groupOrganization.has(groupId) || owners.get(otherId) !== groupOrganization.get(groupId) || groupLinkPairs.has(pair)) {
+        throw new Error(`Backup archive contains an invalid ${table} row`);
+      }
+      groupLinkPairs.add(pair);
+    }
+  }
+
+  const policyKeys = new Set<string>();
+  for (const row of ensureRowArray(payload.db.organization_policies || [], 'organization_policies')) {
+    const id = String(row.id || '').trim();
+    const key = `${String(row.organization_id || '').trim()}/${String(row.type ?? '').trim()}`;
+    if (!id || policyKeys.has(id) || policyKeys.has(key) || !organizationIds.has(String(row.organization_id || '').trim())) {
+      throw new Error('Backup archive contains an invalid organization policy row');
+    }
+    policyKeys.add(id);
+    policyKeys.add(key);
+  }
+
   // Optional: archives made before emergency access existed have no such key.
   const emergencyAccessIds = new Set<string>();
   for (const row of ensureRowArray(payload.db.emergency_access || [], 'emergency_access')) {
@@ -564,7 +612,8 @@ export async function buildBackupArchive(
   const encoder = new TextEncoder();
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
-    organizationRows, memberRows, collectionRows, collectionMemberRows, emergencyAccessRows,
+    organizationRows, memberRows, collectionRows, collectionMemberRows, groupRows, groupMemberRows, collectionGroupRows, policyRows,
+    emergencyAccessRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
@@ -578,6 +627,10 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM organization_groups ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT group_id, member_id FROM group_members ORDER BY group_id ASC, member_id ASC'),
+    queryRows(env.DB, 'SELECT collection_id, group_id, read_only, hide_passwords, manage FROM collection_groups ORDER BY collection_id ASC, group_id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, type, enabled, data, updated_at FROM organization_policies ORDER BY organization_id ASC, type ASC'),
     queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
@@ -611,6 +664,10 @@ export async function buildBackupArchive(
       organization_members: memberRows.length,
       collections: collectionRows.length,
       collection_members: collectionMemberRows.length,
+      organization_groups: groupRows.length,
+      group_members: groupMemberRows.length,
+      collection_groups: collectionGroupRows.length,
+      organization_policies: policyRows.length,
       emergency_access: emergencyAccessRows.length,
     },
     includes: {
@@ -639,6 +696,10 @@ export async function buildBackupArchive(
       organization_members: memberRows,
       collections: collectionRows,
       collection_members: collectionMemberRows,
+      organization_groups: groupRows,
+      group_members: groupMemberRows,
+      collection_groups: collectionGroupRows,
+      organization_policies: policyRows,
       emergency_access: emergencyAccessRows,
     }, null, BACKUP_JSON_INDENT)),
   };

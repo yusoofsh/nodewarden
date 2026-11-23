@@ -34,6 +34,10 @@ type BackupTableName =
   | 'organization_members'
   | 'collections'
   | 'collection_members'
+  | 'organization_groups'
+  | 'group_members'
+  | 'collection_groups'
+  | 'organization_policies'
   | 'folders'
   | 'ciphers'
   | 'attachments'
@@ -49,6 +53,10 @@ const BACKUP_TABLES: BackupTableName[] = [
   'organization_members',
   'collections',
   'collection_members',
+  'organization_groups',
+  'group_members',
+  'collection_groups',
+  'organization_policies',
   'folders',
   'ciphers',
   'attachments',
@@ -188,6 +196,10 @@ function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[]
     'DELETE FROM attachments',
     'DELETE FROM ciphers',
     'DELETE FROM folders',
+    'DELETE FROM organization_policies',
+    'DELETE FROM collection_groups',
+    'DELETE FROM group_members',
+    'DELETE FROM organization_groups',
     'DELETE FROM collection_members',
     'DELETE FROM collections',
     'DELETE FROM organization_members',
@@ -332,6 +344,10 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     organization_members: cloneRows(payload.organization_members || []),
     collections: cloneRows(payload.collections || []),
     collection_members: cloneRows(payload.collection_members || []),
+    organization_groups: cloneRows(payload.organization_groups || []),
+    group_members: cloneRows(payload.group_members || []),
+    collection_groups: cloneRows(payload.collection_groups || []),
+    organization_policies: cloneRows(payload.organization_policies || []),
     folders: cloneRows(payload.folders || []),
     ciphers: cloneRows(payload.ciphers || []).map((row) => ({
       ...row,
@@ -731,6 +747,14 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
       payload.collection_members || []
     )
   );
+  for (const [table, columns] of [
+    ['organization_groups', ['id', 'organization_id', 'name', 'external_id', 'created_at', 'updated_at']],
+    ['group_members', ['group_id', 'member_id']],
+    ['collection_groups', ['collection_id', 'group_id', 'read_only', 'hide_passwords', 'manage']],
+    ['organization_policies', ['id', 'organization_id', 'type', 'enabled', 'data', 'updated_at']],
+  ] as const) {
+    await runInsertBatch(db, tableName(table), buildInsertStatements(db, tableName(table), [...columns], payload[table] || []));
+  }
   await runInsertBatch(
     db,
     tableName('folders'),
@@ -809,6 +833,10 @@ export async function importBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      organization_groups: (db.organization_groups || []).length,
+      group_members: (db.group_members || []).length,
+      collection_groups: (db.collection_groups || []).length,
+      organization_policies: (db.organization_policies || []).length,
       emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
@@ -837,6 +865,10 @@ export async function importBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      organization_groups: (db.organization_groups || []).length,
+      group_members: (db.group_members || []).length,
+      collection_groups: (db.collection_groups || []).length,
+      organization_policies: (db.organization_policies || []).length,
       emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
@@ -960,6 +992,10 @@ export async function importRemoteBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      organization_groups: (db.organization_groups || []).length,
+      group_members: (db.group_members || []).length,
+      collection_groups: (db.collection_groups || []).length,
+      organization_policies: (db.organization_policies || []).length,
       emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
@@ -988,6 +1024,10 @@ export async function importRemoteBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      organization_groups: (db.organization_groups || []).length,
+      group_members: (db.group_members || []).length,
+      collection_groups: (db.collection_groups || []).length,
+      organization_policies: (db.organization_policies || []).length,
       emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,

@@ -1,4 +1,5 @@
 // Organizations, their members and collections. Organization-owned ciphers are not stored yet.
+import { type GroupAccess, type GroupMember, insertGroupAccess, insertGroupMember } from './storage-organization-group-repo';
 
 export const MemberStatus = { Revoked: -1, Invited: 0, Accepted: 1, Confirmed: 2 } as const;
 export const MemberType = { Owner: 0, Admin: 1, User: 2, Custom: 4 } as const;
@@ -278,8 +279,10 @@ export async function listCollectionAccess(db: D1Database, organizationId: strin
 }
 
 /**
- * Collections a user can see across organizations, with that user's access row when there is one:
- * every collection of a confirmed membership with access to all, and the collections assigned to the member.
+ * Collections a user can see across organizations, with that user's access when there is one: every
+ * collection of a confirmed membership with access to all, and the collections assigned to the member
+ * directly or through its groups. As in Vaultwarden, a direct assignment wins over the groups, and
+ * several groups combine to the most permissive access.
  */
 export async function listCollectionsForUser(
   db: D1Database,
@@ -288,12 +291,18 @@ export async function listCollectionsForUser(
   const { results } = await db
     .prepare(
       `SELECT ${MEMBER_COLUMNS}, c.id AS c_id, c.name AS c_name, c.external_id AS c_external_id, c.created_at AS c_created_at, ` +
-      'c.updated_at AS c_updated_at, cm.member_id AS cm_member_id, cm.read_only, cm.hide_passwords, cm.manage ' +
+      'c.updated_at AS c_updated_at, cm.member_id AS cm_member_id, cm.read_only, cm.hide_passwords, cm.manage, ' +
+      'ga.member_id AS ga_member_id, ga.read_only AS ga_read_only, ga.hide_passwords AS ga_hide_passwords, ga.manage AS ga_manage ' +
       'FROM collections c INNER JOIN organization_members m ON m.organization_id = c.organization_id AND m.user_id = ? ' +
       'LEFT JOIN collection_members cm ON cm.collection_id = c.id AND cm.member_id = m.id ' +
-      'WHERE m.status = ? AND (m.access_all = 1 OR cm.member_id IS NOT NULL) ORDER BY c.organization_id ASC, c.created_at ASC, c.id ASC'
+      'LEFT JOIN (SELECT cg.collection_id, gm.member_id, MIN(cg.read_only) AS read_only, MIN(cg.hide_passwords) AS hide_passwords, MAX(cg.manage) AS manage ' +
+      'FROM collection_groups cg INNER JOIN group_members gm ON gm.group_id = cg.group_id ' +
+      'WHERE gm.member_id IN (SELECT id FROM organization_members WHERE user_id = ?) GROUP BY cg.collection_id, gm.member_id) ga ' +
+      'ON ga.collection_id = c.id AND ga.member_id = m.id ' +
+      'WHERE m.status = ? AND (m.access_all = 1 OR cm.member_id IS NOT NULL OR ga.member_id IS NOT NULL) ' +
+      'ORDER BY c.organization_id ASC, c.created_at ASC, c.id ASC'
     )
-    .bind(userId, MemberStatus.Confirmed)
+    .bind(userId, userId, MemberStatus.Confirmed)
     .all<any>();
   return (results || []).map((row) => ({
     collection: mapCollection({
@@ -305,15 +314,26 @@ export async function listCollectionsForUser(
       updated_at: row.c_updated_at,
     }),
     member: mapMember(row),
-    access: row.cm_member_id ? mapAccess({ ...row, collection_id: row.c_id, member_id: row.cm_member_id }) : null,
+    access: row.cm_member_id
+      ? mapAccess({ ...row, collection_id: row.c_id, member_id: row.cm_member_id })
+      : row.ga_member_id
+        ? mapAccess({
+            collection_id: row.c_id,
+            member_id: row.ga_member_id,
+            read_only: row.ga_read_only,
+            hide_passwords: row.ga_hide_passwords,
+            manage: row.ga_manage,
+          })
+        : null,
   }));
 }
 
-/** Creates or updates a collection and replaces its member access list, in one transaction. */
+/** Creates or updates a collection and replaces its member and group access lists, in one transaction. */
 export async function saveCollection(
   db: D1Database,
   collection: Collection,
   access: CollectionAccess[],
+  groupAccess: GroupAccess[],
   isNew: boolean
 ): Promise<void> {
   const statements: D1PreparedStatement[] = [
@@ -323,7 +343,9 @@ export async function saveCollection(
           .prepare('UPDATE collections SET name = ?, external_id = ?, updated_at = ? WHERE id = ? AND organization_id = ?')
           .bind(collection.name, collection.externalId, collection.updatedAt, collection.id, collection.organizationId),
     db.prepare('DELETE FROM collection_members WHERE collection_id = ?').bind(collection.id),
+    db.prepare('DELETE FROM collection_groups WHERE collection_id = ?').bind(collection.id),
     ...access.map((a) => insertAccess(db, a)),
+    ...groupAccess.map((a) => insertGroupAccess(db, a)),
   ];
   await db.batch(statements);
 }
@@ -340,8 +362,13 @@ export async function getMemberById(db: D1Database, organizationId: string, memb
   return row ? mapMember(row) : null;
 }
 
-/** Inserts invited members and their collection access, in one transaction. */
-export async function inviteMembers(db: D1Database, members: OrganizationMember[], access: CollectionAccess[]): Promise<void> {
+/** Inserts invited members, their collection access and their groups, in one transaction. */
+export async function inviteMembers(
+  db: D1Database,
+  members: OrganizationMember[],
+  access: CollectionAccess[],
+  groups: GroupMember[]
+): Promise<void> {
   await db.batch([
     ...members.map((m) =>
       db
@@ -352,6 +379,7 @@ export async function inviteMembers(db: D1Database, members: OrganizationMember[
         .bind(m.id, m.organizationId, m.userId, m.akey, m.status, m.type, m.accessAll ? 1 : 0, m.resetPasswordKey, m.createdAt, m.updatedAt)
     ),
     ...access.map((a) => insertAccess(db, a)),
+    ...groups.map((g) => insertGroupMember(db, g)),
   ]);
 }
 
@@ -374,13 +402,14 @@ export async function transitionMember(
   return Number(result.meta?.changes || 0) > 0;
 }
 
-/** Sets a member's role and replaces its collection access, in one transaction. */
+/** Sets a member's role and replaces its collection access, and its groups unless null, in one transaction. */
 export async function updateMemberAccess(
   db: D1Database,
   member: OrganizationMember,
   type: number,
   accessAll: boolean,
-  access: CollectionAccess[]
+  access: CollectionAccess[],
+  groupIds: string[] | null
 ): Promise<void> {
   await db.batch([
     db
@@ -388,5 +417,18 @@ export async function updateMemberAccess(
       .bind(type, accessAll ? 1 : 0, new Date().toISOString(), member.id, member.organizationId),
     db.prepare('DELETE FROM collection_members WHERE member_id = ?').bind(member.id),
     ...access.map((a) => insertAccess(db, a)),
+    ...(groupIds === null ? [] : replaceMemberGroups(db, member.id, groupIds)),
   ]);
+}
+
+function replaceMemberGroups(db: D1Database, memberId: string, groupIds: string[]): D1PreparedStatement[] {
+  return [
+    db.prepare('DELETE FROM group_members WHERE member_id = ?').bind(memberId),
+    ...groupIds.map((groupId) => insertGroupMember(db, { groupId, memberId })),
+  ];
+}
+
+/** Replaces the groups a member is in, in one transaction. */
+export async function setMemberGroups(db: D1Database, memberId: string, groupIds: string[]): Promise<void> {
+  await db.batch(replaceMemberGroups(db, memberId, groupIds));
 }

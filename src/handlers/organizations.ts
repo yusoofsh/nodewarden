@@ -17,16 +17,19 @@ import {
   listCollectionAccess,
   listCollections,
   listCollectionsForUser,
+  listMembershipsByUser,
   listMembersWithUsers,
   listMemberUserIds,
   saveCollection,
   updateOrganization,
 } from '../services/storage-organization-repo';
+import { type GroupAccess, listGroupAccess, listGroupMembers, listGroups } from '../services/storage-organization-group-repo';
 import { isAdminOrOwner, isLastConfirmedOwner } from '../services/org-access';
 import {
   collectionDetailsJson,
   collectionJson,
   collectionMemberAccessJson,
+  groupAccessJson,
   memberDetailsJson,
   organizationJson,
 } from '../utils/organization-response';
@@ -53,7 +56,7 @@ export async function touchUsers(db: D1Database, userIds: string[]): Promise<voi
   for (const userId of userIds) await updateRevisionDate(db, userId);
 }
 
-async function touchOrganization(db: D1Database, organizationId: string): Promise<void> {
+export async function touchOrganization(db: D1Database, organizationId: string): Promise<void> {
   await touchUsers(db, await listMemberUserIds(db, organizationId));
 }
 
@@ -160,17 +163,42 @@ export async function handleGetOrganizationPublicKey(env: Env, organizationId: s
   return jsonResponse({ object: 'organizationPublicKey', publicKey: organization.publicKey });
 }
 
-// GET /api/organizations/{id}/users?includeCollections=true
+export const queryFlag = (request: Request, name: string): boolean => /^true$/i.test(new URL(request.url).searchParams.get(name) || '');
+
+// GET /api/organizations/{id}/users?includeCollections=true&includeGroups=true
 export async function handleGetOrganizationMembers(request: Request, env: Env, organizationId: string): Promise<Response> {
-  const includeCollections = /^true$/i.test(new URL(request.url).searchParams.get('includeCollections') || '');
-  const [members, access] = await Promise.all([
+  const includeCollections = queryFlag(request, 'includeCollections');
+  const includeGroups = queryFlag(request, 'includeGroups');
+  const [members, access, groupMembers] = await Promise.all([
     listMembersWithUsers(env.DB, organizationId),
     includeCollections ? listCollectionAccess(env.DB, organizationId) : Promise.resolve([]),
+    includeGroups ? listGroupMembers(env.DB, organizationId) : Promise.resolve([]),
   ]);
   return list(
     members.map((member) =>
-      memberDetailsJson(member, includeCollections ? access.filter((a) => a.memberId === member.id) : null)
+      memberDetailsJson(
+        member,
+        includeCollections ? access.filter((a) => a.memberId === member.id) : null,
+        groupMembers.filter((g) => g.memberId === member.id).map((g) => g.groupId)
+      )
     )
+  );
+}
+
+// GET /api/organizations/invitations
+// Not a Bitwarden route. This server sends no invite email, so an invitee finds the member id
+// to accept here: the caller's invited memberships, with the organization's name.
+export async function handleGetPendingInvitations(env: Env, userId: string): Promise<Response> {
+  const invited = await listMembershipsByUser(env.DB, userId, [MemberStatus.Invited]);
+  return list(
+    invited.map(({ member, organization }) => ({
+      id: member.id,
+      organizationId: organization.id,
+      organizationName: organization.name,
+      type: member.type,
+      status: member.status,
+      object: 'organizationInvitation',
+    }))
   );
 }
 
@@ -193,11 +221,14 @@ export async function handleGetOrganizationCollectionDetails(
   viewer: OrganizationMember,
   organizationId: string
 ): Promise<Response> {
-  const [collections, access, members] = await Promise.all([
+  const [collections, access, members, groupAccess, groupMembers] = await Promise.all([
     listCollections(env.DB, organizationId),
     listCollectionAccess(env.DB, organizationId),
     listMembersWithUsers(env.DB, organizationId),
+    listGroupAccess(env.DB, organizationId),
+    listGroupMembers(env.DB, organizationId),
   ]);
+  const viewerGroups = new Set(groupMembers.filter((g) => g.memberId === viewer.id).map((g) => g.groupId));
   const typeByMember = new Map(members.map((m) => [m.id, m.type]));
   const manageAll = members
     .filter((m) => m.status === MemberStatus.Confirmed && isAdminOrOwner(m))
@@ -207,11 +238,12 @@ export async function handleGetOrganizationCollectionDetails(
   const data = collections.map((collection) => {
     const rows = access.filter((a) => a.collectionId === collection.id);
     const own = rows.find((a) => a.memberId === viewer.id) ?? null;
+    const groups = groupAccess.filter((a) => a.collectionId === collection.id);
     return {
       ...collectionDetailsJson(collection, viewer, own),
-      assigned: fullAccess || own !== null,
+      assigned: fullAccess || own !== null || groups.some((a) => viewerGroups.has(a.groupId)),
       users: [...rows.map((a) => collectionMemberAccessJson(a, typeByMember.get(a.memberId) ?? MemberType.User)), ...manageAll],
-      groups: [],
+      groups: groups.map(groupAccessJson),
       object: 'collectionAccessDetails',
       unmanaged: false,
     };
@@ -219,18 +251,29 @@ export async function handleGetOrganizationCollectionDetails(
   return list(data);
 }
 
-// Reads a collection request body. Member ids must belong to this organization; members with
-// access to every collection need no row, as in Vaultwarden.
+// Reads a collection request body. Member and group ids must belong to this organization; members
+// with access to every collection need no row, as in Vaultwarden.
 async function readCollectionBody(
   request: Request,
   db: D1Database,
   organizationId: string
-): Promise<{ name: string; externalId: string | null; access: Omit<CollectionAccess, 'collectionId'>[] } | Response> {
+): Promise<
+  | { name: string; externalId: string | null; access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] }
+  | Response
+> {
   const body = await readBody(request);
   if (!body) return errorResponse('Invalid JSON', 400);
   const name = str(body.name);
   if (!name) return errorResponse('name is required', 400);
-  if (Array.isArray(body.groups) && body.groups.length > 0) return errorResponse('Invalid group', 400);
+
+  const groupIds = new Set((await listGroups(db, organizationId)).map((g) => g.id));
+  // Keyed by group, so a repeated id keeps its last entry instead of failing the insert.
+  const groupAccess = new Map<string, Omit<GroupAccess, 'collectionId'>>();
+  for (const entry of Array.isArray(body.groups) ? body.groups : []) {
+    const groupId = isRecord(entry) ? str(entry.id).toLowerCase() : '';
+    if (!isRecord(entry) || !groupIds.has(groupId)) return errorResponse('Invalid group', 400);
+    groupAccess.set(groupId, { groupId, ...accessFlags(entry) });
+  }
 
   const members = new Map((await listMembersWithUsers(db, organizationId)).map((m) => [m.id, m]));
   const access: Omit<CollectionAccess, 'collectionId'>[] = [];
@@ -238,20 +281,27 @@ async function readCollectionBody(
     const member = isRecord(entry) ? members.get(str(entry.id).toLowerCase()) : undefined;
     if (!member || !isRecord(entry)) return errorResponse('Invalid member', 400);
     if (member.accessAll) continue;
-    access.push({ memberId: member.id, readOnly: entry.readOnly === true, hidePasswords: entry.hidePasswords === true, manage: entry.manage === true });
+    access.push({ memberId: member.id, ...accessFlags(entry) });
   }
-  return { name, externalId: str(body.externalId) || null, access };
+  return { name, externalId: str(body.externalId) || null, access, groupAccess: [...groupAccess.values()] };
 }
+
+export const accessFlags = (entry: Json) => ({
+  readOnly: entry.readOnly === true,
+  hidePasswords: entry.hidePasswords === true,
+  manage: entry.manage === true,
+});
 
 async function writeCollection(
   env: Env,
   viewer: OrganizationMember,
   collection: Collection,
-  access: Omit<CollectionAccess, 'collectionId'>[],
+  parsed: { access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] },
   isNew: boolean
 ): Promise<Response> {
-  const rows = access.map((a) => ({ ...a, collectionId: collection.id }));
-  await saveCollection(env.DB, collection, rows, isNew);
+  const rows = parsed.access.map((a) => ({ ...a, collectionId: collection.id }));
+  const groupRows = parsed.groupAccess.map((a) => ({ ...a, collectionId: collection.id }));
+  await saveCollection(env.DB, collection, rows, groupRows, isNew);
   await touchOrganization(env.DB, collection.organizationId);
   return jsonResponse(collectionDetailsJson(collection, viewer, rows.find((a) => a.memberId === viewer.id) ?? null));
 }
@@ -267,7 +317,7 @@ export async function handleCreateCollection(
   if (parsed instanceof Response) return parsed;
   const now = new Date().toISOString();
   const collection = { id: generateUUID(), organizationId, name: parsed.name, externalId: parsed.externalId, createdAt: now, updatedAt: now };
-  return writeCollection(env, viewer, collection, parsed.access, true);
+  return writeCollection(env, viewer, collection, parsed, true);
 }
 
 // PUT /api/organizations/{id}/collections/{collectionId}
@@ -283,7 +333,7 @@ export async function handleUpdateCollection(
   const parsed = await readCollectionBody(request, env.DB, organizationId);
   if (parsed instanceof Response) return parsed;
   const collection = { ...existing, name: parsed.name, externalId: parsed.externalId, updatedAt: new Date().toISOString() };
-  return writeCollection(env, viewer, collection, parsed.access, false);
+  return writeCollection(env, viewer, collection, parsed, false);
 }
 
 // DELETE /api/organizations/{id}/collections/{collectionId}

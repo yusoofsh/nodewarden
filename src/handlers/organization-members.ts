@@ -3,12 +3,14 @@
 //
 // Vaultwarden's organizations.rs, with mail off: this server sends no email.
 // - Inviting an existing account creates an invited row. The invitee accepts it from their own
-//   session, so no token is needed or checked. Inviting an unknown email is refused, since
+//   session, so no token is needed or checked; GET /api/organizations/invitations gives them the
+//   member id to accept. Inviting an unknown email is refused, since
 //   nobody could deliver the invite. Vaultwarden instead accepts at once when mail is off,
 //   which joins the invitee without their consent.
 // - Reinvite only checks that the member is still invited: there is nothing to resend.
 // - Custom roles are not offered, so a role is Owner, Admin or User. Owners and Admins have
-//   access to every collection; Users get the collections assigned to them.
+//   access to every collection; Users get the collections assigned to them and to their groups.
+// - Updating a member without a `groups` list keeps its groups. Vaultwarden clears them.
 import type { Env } from '../types';
 import { StorageService } from '../services/storage';
 import {
@@ -28,9 +30,11 @@ import {
 } from '../services/storage-organization-repo';
 import { isLastConfirmedOwner, roleManageError } from '../services/org-access';
 import { memberDetailsJson } from '../utils/organization-response';
+import { listGroupMembers } from '../services/storage-organization-group-repo';
+import { readMemberGroupIds } from './organization-groups';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import { isRecord, list, readBody, str, touchUsers } from './organizations';
+import { accessFlags, isRecord, list, queryFlag, readBody, str, touchUsers } from './organizations';
 
 type Json = Record<string, unknown>;
 type AccessTemplate = Omit<CollectionAccess, 'memberId'>;
@@ -52,12 +56,13 @@ async function readRoleAndAccess(
   db: D1Database,
   caller: OrganizationMember,
   body: Json
-): Promise<{ type: number; accessAll: boolean; access: AccessTemplate[] } | string> {
+): Promise<{ type: number; accessAll: boolean; access: AccessTemplate[]; groupIds: string[] | null } | string> {
   const type = parseRole(body.type);
   if (type === null) return 'Invalid type';
   const manageError = roleManageError(caller, type);
   if (manageError) return manageError;
-  if (Array.isArray(body.groups) && body.groups.length > 0) return 'Invalid group';
+  const groupIds = Array.isArray(body.groups) ? await readMemberGroupIds(db, caller.organizationId, body.groups) : null;
+  if (typeof groupIds === 'string') return groupIds;
 
   const collectionIds = new Set((await listCollections(db, caller.organizationId)).map((c) => c.id));
   // Keyed by collection, so a repeated id keeps its last entry instead of failing the insert.
@@ -65,10 +70,10 @@ async function readRoleAndAccess(
   for (const entry of Array.isArray(body.collections) ? body.collections : []) {
     const collectionId = isRecord(entry) ? str(entry.id).toLowerCase() : '';
     if (!isRecord(entry) || !collectionIds.has(collectionId)) return 'Collection not found in Organization';
-    access.set(collectionId, { collectionId, readOnly: entry.readOnly === true, hidePasswords: entry.hidePasswords === true, manage: entry.manage === true });
+    access.set(collectionId, { collectionId, ...accessFlags(entry) });
   }
   const accessAll = isFullAccessRole(type);
-  return { type, accessAll, access: accessAll ? [] : [...access.values()] };
+  return { type, accessAll, access: accessAll ? [] : [...access.values()], groupIds };
 }
 
 const withMember = (templates: AccessTemplate[], memberId: string): CollectionAccess[] => templates.map((a) => ({ ...a, memberId }));
@@ -103,7 +108,12 @@ export async function handleInviteMembers(request: Request, env: Env, caller: Or
       updatedAt: now,
     });
   }
-  await inviteMembers(env.DB, members, members.flatMap((m) => withMember(parsed.access, m.id)));
+  await inviteMembers(
+    env.DB,
+    members,
+    members.flatMap((m) => withMember(parsed.access, m.id)),
+    members.flatMap((m) => (parsed.groupIds ?? []).map((groupId) => ({ groupId, memberId: m.id })))
+  );
   return ok();
 }
 
@@ -188,13 +198,18 @@ export async function handleAcceptInvite(env: Env, member: OrganizationMember): 
   return ok();
 }
 
-// GET /api/organizations/{id}/users/{memberId}?includeCollections=true
+// GET /api/organizations/{id}/users/{memberId}?includeCollections=true&includeGroups=true
+// As in Vaultwarden, asking for groups also includes collections.
 export async function handleGetMember(request: Request, env: Env, caller: OrganizationMember, memberId: string): Promise<Response> {
   const member = (await listMembersWithUsers(env.DB, caller.organizationId)).find((m) => m.id === memberId);
   if (!member) return errorResponse("The specified user isn't a member of the organization", 400);
-  const includeCollections = /^true$/i.test(new URL(request.url).searchParams.get('includeCollections') || '');
+  const includeGroups = queryFlag(request, 'includeGroups');
+  const includeCollections = includeGroups || queryFlag(request, 'includeCollections');
   const access = includeCollections ? (await listCollectionAccess(env.DB, caller.organizationId)).filter((a) => a.memberId === memberId) : null;
-  return jsonResponse({ ...memberDetailsJson(member, access), object: 'organizationUserDetails' });
+  const groupIds = includeGroups
+    ? (await listGroupMembers(env.DB, caller.organizationId)).filter((g) => g.memberId === memberId).map((g) => g.groupId)
+    : [];
+  return jsonResponse({ ...memberDetailsJson(member, access, groupIds), object: 'organizationUserDetails' });
 }
 
 // PUT /api/organizations/{id}/users/{memberId}
@@ -213,7 +228,7 @@ export async function handleUpdateMember(request: Request, env: Env, caller: Org
     if (await isLastConfirmedOwner(env.DB, member)) return errorResponse("Can't delete the last owner", 400);
     if (member.id === caller.id) return errorResponse('You cannot change your own role', 400);
   }
-  await updateMemberAccess(env.DB, member, parsed.type, parsed.accessAll, withMember(parsed.access, member.id));
+  await updateMemberAccess(env.DB, member, parsed.type, parsed.accessAll, withMember(parsed.access, member.id), parsed.groupIds);
   await touchUsers(env.DB, [member.userId]);
   return ok();
 }
