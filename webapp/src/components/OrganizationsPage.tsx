@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, LogOut, Pencil, Plus, RefreshCw, Trash2, UserCheck, UserPlus } from 'lucide-preact';
+import { confirmThen, type SetConfirm } from '@/components/AppGlobalOverlays';
 import LoadingState from '@/components/LoadingState';
 import type { AuthedFetch } from '@/lib/api/shared';
 import {
@@ -55,6 +56,7 @@ export interface OrganizationsPageProps {
   authedFetch: AuthedFetch;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
   deriveMasterPasswordHash: (masterPassword: string) => Promise<string>;
+  onSetConfirm: SetConfirm;
 }
 
 type Tab = 'members' | 'collections' | 'groups' | 'policies' | 'items' | 'settings';
@@ -280,7 +282,8 @@ export default function OrganizationsPage(props: OrganizationsPageProps) {
 
       {selected && privateKey && (
         <OrganizationDetail
-          key={selected.id}
+          // A role change gives other tabs, so the detail starts over.
+          key={`${selected.id}:${selected.type}`}
           org={selected}
           privateKey={privateKey}
           busy={busy}
@@ -308,20 +311,22 @@ function OrganizationDetail(props: DetailProps) {
   const { authedFetch, org, run, busy } = props;
   const isAdmin = org.type === OrgRole.Owner || org.type === OrgRole.Admin;
   const isOwner = org.type === OrgRole.Owner;
+  const userId = props.profile?.id;
   const [tab, setTab] = useState<Tab>(isAdmin ? 'members' : 'collections');
 
   const keyQuery = useQuery({
-    queryKey: ['org-key', org.id, org.key],
+    queryKey: ['org-key', userId, org.id, org.key],
     queryFn: async () => unwrapKey(org.key || '', await props.privateKey),
     enabled: !!org.key,
     staleTime: Infinity,
+    gcTime: 0,
   });
   const orgKey = keyQuery.data ?? null;
 
-  const membersQuery = useQuery({ queryKey: ['org-members', org.id], queryFn: () => listMembers(authedFetch, org.id), enabled: isAdmin });
+  const membersQuery = useQuery({ queryKey: ['org-members', userId, org.id], queryFn: () => listMembers(authedFetch, org.id), enabled: isAdmin });
   // Admins get every collection with its access; other members only the ones assigned to them.
   const collectionsQuery = useQuery({
-    queryKey: ['org-collections', org.id, !!orgKey],
+    queryKey: ['org-collections', userId, org.id, !!orgKey],
     queryFn: async (): Promise<DecryptedCollection[]> => {
       const rows = isAdmin
         ? await listCollectionDetails(authedFetch, org.id)
@@ -329,8 +334,9 @@ function OrganizationDetail(props: DetailProps) {
       return Promise.all(rows.map(async (row) => ({ ...row, decName: orgKey ? await decryptText(row.name, orgKey) : '' })));
     },
     enabled: !!orgKey,
+    gcTime: 0,
   });
-  const groupsQuery = useQuery({ queryKey: ['org-groups', org.id], queryFn: () => listGroups(authedFetch, org.id), enabled: isAdmin });
+  const groupsQuery = useQuery({ queryKey: ['org-groups', userId, org.id], queryFn: () => listGroups(authedFetch, org.id), enabled: isAdmin });
 
   const members = membersQuery.data ?? [];
   const collections = collectionsQuery.data ?? [];
@@ -519,13 +525,14 @@ function MembersTab(
                     type="button"
                     className="btn btn-danger"
                     disabled={busy || member.id === org.organizationUserId}
-                    onClick={() => {
-                      if (!window.confirm(t('txt_org_remove_member_confirm', { email: member.email }))) return;
-                      void run(async () => {
-                        await removeMember(authedFetch, org.id, member.id);
-                        await props.onChanged();
-                      }, t('txt_org_member_removed'));
-                    }}
+                    onClick={() =>
+                      confirmThen(props.onSetConfirm, t('txt_remove'), t('txt_org_remove_member_confirm', { email: member.email }), () =>
+                        void run(async () => {
+                          await removeMember(authedFetch, org.id, member.id);
+                          await props.onChanged();
+                        }, t('txt_org_member_removed'))
+                      )
+                    }
                   >
                     <Trash2 size={14} className="btn-icon" /> {t('txt_remove')}
                   </button>
@@ -621,13 +628,14 @@ function CollectionsTab(props: DetailProps & { orgKey: SymmetricKey; isAdmin: bo
                     type="button"
                     className="btn btn-danger"
                     disabled={busy}
-                    onClick={() => {
-                      if (!window.confirm(t('txt_org_delete_collection_confirm', { name: collection.decName }))) return;
-                      void run(async () => {
-                        await deleteCollection(authedFetch, org.id, collection.id);
-                        await props.onChanged();
-                      }, t('txt_org_collection_deleted'));
-                    }}
+                    onClick={() =>
+                      confirmThen(props.onSetConfirm, t('txt_delete'), t('txt_org_delete_collection_confirm', { name: collection.decName }), () =>
+                        void run(async () => {
+                          await deleteCollection(authedFetch, org.id, collection.id);
+                          await props.onChanged();
+                        }, t('txt_org_collection_deleted'))
+                      )
+                    }
                   >
                     <Trash2 size={14} className="btn-icon" /> {t('txt_delete')}
                   </button>
@@ -740,13 +748,14 @@ function GroupsTab(
                     type="button"
                     className="btn btn-danger"
                     disabled={busy}
-                    onClick={() => {
-                      if (!window.confirm(t('txt_org_delete_group_confirm', { name: group.name }))) return;
-                      void run(async () => {
-                        await deleteGroup(authedFetch, org.id, group.id);
-                        await props.onChanged();
-                      }, t('txt_org_group_deleted'));
-                    }}
+                    onClick={() =>
+                      confirmThen(props.onSetConfirm, t('txt_delete'), t('txt_org_delete_group_confirm', { name: group.name }), () =>
+                        void run(async () => {
+                          await deleteGroup(authedFetch, org.id, group.id);
+                          await props.onChanged();
+                        }, t('txt_org_group_deleted'))
+                      )
+                    }
                   >
                     <Trash2 size={14} className="btn-icon" /> {t('txt_delete')}
                   </button>
@@ -769,7 +778,7 @@ function GroupsTab(
 
 function PoliciesTab(props: DetailProps) {
   const { authedFetch, org, run, busy } = props;
-  const policiesQuery = useQuery({ queryKey: ['org-policies', org.id], queryFn: () => listPolicies(authedFetch, org.id) });
+  const policiesQuery = useQuery({ queryKey: ['org-policies', props.profile?.id, org.id], queryFn: () => listPolicies(authedFetch, org.id) });
   const stored = new Map((policiesQuery.data ?? []).map((p) => [p.type, p]));
 
   return (
@@ -814,7 +823,8 @@ function ItemsTab(props: DetailProps & { orgKey: SymmetricKey; collections: Decr
   const { authedFetch, org, orgKey } = props;
   const names = new Map(props.collections.map((c) => [c.id, c.decName]));
   const itemsQuery = useQuery({
-    queryKey: ['org-items', org.id],
+    queryKey: ['org-items', props.profile?.id, org.id],
+    gcTime: 0,
     queryFn: async () => {
       const ciphers = await listOrganizationCiphers(authedFetch, org.id);
       return Promise.all(
@@ -866,7 +876,6 @@ function ItemsTab(props: DetailProps & { orgKey: SymmetricKey; collections: Decr
 function SettingsTab(props: DetailProps & { isOwner: boolean }) {
   const { authedFetch, org, run, busy } = props;
   const [name, setName] = useState(org.name);
-  const [masterPassword, setMasterPassword] = useState('');
 
   return (
     <div className="stack">
@@ -889,49 +898,46 @@ function SettingsTab(props: DetailProps & { isOwner: boolean }) {
           </button>
         </form>
       )}
-      {props.isOwner ? (
-        <form
-          className="actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!window.confirm(t('txt_org_delete_confirm', { name: org.name }))) return;
-            void run(async () => {
-              await deleteOrganization(authedFetch, org.id, await props.deriveMasterPasswordHash(masterPassword));
-              props.onClosed();
-            }, t('txt_org_deleted'));
-          }}
-        >
-          <input
-            className="input"
-            type="password"
-            required
-            autoComplete="current-password"
-            placeholder={t('txt_master_password')}
-            value={masterPassword}
-            onInput={(event) => setMasterPassword(readValue(event))}
-          />
-          <button type="submit" className="btn btn-danger" disabled={busy || !masterPassword}>
-            <Trash2 size={14} className="btn-icon" /> {t('txt_org_delete')}
-          </button>
-        </form>
-      ) : (
-        <div className="actions">
+      <div className="actions">
+        {props.isOwner ? (
           <button
             type="button"
             className="btn btn-danger"
             disabled={busy}
-            onClick={() => {
-              if (!window.confirm(t('txt_org_leave_confirm', { name: org.name }))) return;
-              void run(async () => {
-                await leaveOrganization(authedFetch, org.id);
-                props.onClosed();
-              }, t('txt_org_left'));
-            }}
+            onClick={() =>
+              confirmThen(
+                props.onSetConfirm,
+                t('txt_org_delete'),
+                t('txt_org_delete_confirm', { name: org.name }),
+                (masterPassword) =>
+                  void run(async () => {
+                    await deleteOrganization(authedFetch, org.id, await props.deriveMasterPasswordHash(masterPassword || ''));
+                    props.onClosed();
+                  }, t('txt_org_deleted')),
+                true
+              )
+            }
+          >
+            <Trash2 size={14} className="btn-icon" /> {t('txt_org_delete')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={busy}
+            onClick={() =>
+              confirmThen(props.onSetConfirm, t('txt_org_leave'), t('txt_org_leave_confirm', { name: org.name }), () =>
+                void run(async () => {
+                  await leaveOrganization(authedFetch, org.id);
+                  props.onClosed();
+                }, t('txt_org_left'))
+              )
+            }
           >
             <LogOut size={14} className="btn-icon" /> {t('txt_org_leave')}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

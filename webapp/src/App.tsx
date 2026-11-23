@@ -2030,6 +2030,7 @@ export default function App() {
     session,
     authedFetch,
     deriveMasterPasswordHash: deriveCurrentMasterPasswordHash,
+    onSetConfirm: setConfirm,
     mobileLayout,
     mobileSidebarToggleKey,
     themePreference,

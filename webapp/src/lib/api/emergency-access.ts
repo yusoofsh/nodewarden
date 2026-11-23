@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { parseErrorMessage, parseJson, type AuthedFetch } from './shared';
 
 export const EmergencyType = { View: 0, Takeover: 1 } as const;
@@ -54,6 +55,6 @@ export async function viewGrantorVault(authedFetch: AuthedFetch, id: string): Pr
   const body = await parseJson<{ ciphers?: Array<{ id: string; type: number; name?: string | null; key?: string | null }>; keyEncrypted?: string }>(
     await post(authedFetch, item(id, 'view'))
   );
-  if (!body?.keyEncrypted) throw new Error('No key was returned');
+  if (!body?.keyEncrypted) throw new Error(t('txt_vault_key_unavailable'));
   return { ciphers: body.ciphers ?? [], keyEncrypted: body.keyEncrypted };
 }

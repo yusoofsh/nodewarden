@@ -1,4 +1,5 @@
 import { parseErrorMessage, parseJson, type AuthedFetch } from './shared';
+import { t } from '../i18n';
 import type { Cipher } from '../types';
 
 // Bitwarden's enums, as this server stores them.
@@ -123,7 +124,7 @@ export const removeMember = (authedFetch: AuthedFetch, orgId: string, memberId: 
 export async function getMemberPublicKey(authedFetch: AuthedFetch, orgId: string, memberId: string): Promise<string> {
   const resp = await send(authedFetch, `${org(orgId)}/users/public-keys`, 'POST', { ids: [memberId] });
   const key = (await parseJson<ListBody<{ id: string; key: string | null }>>(resp))?.data?.find((entry) => entry.id === memberId)?.key;
-  if (!key) throw new Error('The member has no public key');
+  if (!key) throw new Error(t('txt_org_member_no_public_key'));
   return key;
 }
 

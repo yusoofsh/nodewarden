@@ -2,6 +2,7 @@
 // - A symmetric key is 64 bytes, an AES key then a MAC key, and strings it encrypts are type 2.
 // - A key wrapped for a user is RSA-OAEP SHA-1 over their SPKI public key, as `4.<base64>`.
 import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, toBufferSource } from './crypto';
+import { t } from './i18n';
 import type { SessionState } from './types';
 
 export interface SymmetricKey {
@@ -24,7 +25,7 @@ const joinKey = (key: SymmetricKey): Uint8Array => {
 };
 
 export function sessionUserKey(session: SessionState | null): SymmetricKey {
-  if (!session?.symEncKey || !session.symMacKey) throw new Error('Vault is locked');
+  if (!session?.symEncKey || !session.symMacKey) throw new Error(t('txt_vault_key_unavailable'));
   return { enc: base64ToBytes(session.symEncKey), mac: base64ToBytes(session.symMacKey) };
 }
 

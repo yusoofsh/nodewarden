@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { Check, Eye, Plus, RefreshCw, Trash2, UserCheck, X } from 'lucide-preact';
+import { confirmThen, type SetConfirm } from '@/components/AppGlobalOverlays';
 import LoadingState from '@/components/LoadingState';
 import type { AuthedFetch } from '@/lib/api/shared';
 import {
@@ -30,6 +31,7 @@ export interface EmergencyAccessPageProps {
   session: SessionState | null;
   authedFetch: AuthedFetch;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
+  onSetConfirm: SetConfirm;
 }
 
 const typeLabel = (type: number) => (type === EmergencyType.Takeover ? t('txt_ea_type_takeover') : t('txt_ea_type_view'));
@@ -103,10 +105,11 @@ export default function EmergencyAccessPage(props: EmergencyAccessPageProps) {
       type="button"
       className="btn btn-danger"
       disabled={busy}
-      onClick={() => {
-        if (!window.confirm(t('txt_ea_remove_confirm', { email: entry.email }))) return;
-        void run(() => deleteAccess(authedFetch, entry.id), t('txt_ea_removed'));
-      }}
+      onClick={() =>
+        confirmThen(props.onSetConfirm, t('txt_remove'), t('txt_ea_remove_confirm', { email: entry.email }), () =>
+          void run(() => deleteAccess(authedFetch, entry.id), t('txt_ea_removed'))
+        )
+      }
     >
       <Trash2 size={14} className="btn-icon" /> {t('txt_remove')}
     </button>
