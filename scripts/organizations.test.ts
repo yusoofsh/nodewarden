@@ -195,8 +195,8 @@ test('a missing organization answers like a foreign one', async () => {
 
 test('unimplemented organization routes stay unmatched', async () => {
   const c = await setup();
-  const req = new Request(`https://vault.test/api/organizations/${c.orgA}/events`);
-  assert.equal(await handleAuthenticatedRoute(req, c.env, ID.owner, makeUser('owner'), `/api/organizations/${c.orgA}/events`, 'GET'), null);
+  const req = new Request(`https://vault.test/api/organizations/${c.orgA}/subscription`);
+  assert.equal(await handleAuthenticatedRoute(req, c.env, ID.owner, makeUser('owner'), `/api/organizations/${c.orgA}/subscription`, 'GET'), null);
 });
 
 test('create returns the organization and makes the caller a confirmed owner with access to all', async () => {
@@ -378,6 +378,7 @@ const ORG_TABLES = {
   group_members: 'SELECT * FROM group_members ORDER BY group_id, member_id',
   collection_groups: 'SELECT * FROM collection_groups ORDER BY collection_id, group_id',
   organization_policies: 'SELECT * FROM organization_policies ORDER BY id',
+  events: 'SELECT * FROM events ORDER BY id',
 };
 
 test('backup export and restore round-trip organizations', async () => {

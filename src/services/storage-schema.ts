@@ -247,6 +247,16 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'FOREIGN KEY (grantee_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_emergency_access_pair ON emergency_access(grantor_id, grantee_id)',
   'CREATE INDEX IF NOT EXISTS idx_emergency_access_grantee ON emergency_access(grantee_id)',
+
+  // Organization event log, after Vaultwarden's event table. Only organization_id is a foreign key: an
+  // event outlives the cipher, member or user it names, and goes with its organization.
+  'CREATE TABLE IF NOT EXISTS events (' +
+  'id TEXT PRIMARY KEY, type INTEGER NOT NULL, organization_id TEXT NOT NULL, user_id TEXT, cipher_id TEXT, collection_id TEXT, ' +
+  'group_id TEXT, member_id TEXT, policy_id TEXT, acting_user_id TEXT, device_type INTEGER, ip_address TEXT, event_date TEXT NOT NULL, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_events_organization_date ON events(organization_id, event_date)',
+  'CREATE INDEX IF NOT EXISTS idx_events_cipher_date ON events(cipher_id, event_date)',
+  'CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date)',
 ];
 
 async function executeSchemaStatement(db: D1Database, statement: string): Promise<void> {

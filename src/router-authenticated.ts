@@ -93,6 +93,8 @@ import {
 } from './handlers/account-compat';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
 import { handleOrganizationRoute } from './router-organizations';
+import { handleCollectEvents, handleGetCipherEvents } from './handlers/events';
+import { eventActor } from './services/events';
 import { handleAdminRoute } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
@@ -335,6 +337,10 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Not found', 404);
   }
 
+  if (path === '/events/collect' && method === 'POST') {
+    return handleCollectEvents(request, env, eventActor(request, userId));
+  }
+
   if (path === '/api/ciphers' || path === '/api/ciphers/create') {
     if (method === 'GET') return handleGetCiphers(request, env, userId);
     if (method === 'POST') return handleCreateCipher(request, env, userId);
@@ -418,6 +424,7 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/delete' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/delete' && (method === 'DELETE' || method === 'POST')) return handlePermanentDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/restore' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
+    if (subPath === '/events' && method === 'GET') return handleGetCipherEvents(request, env, userId, cipherId.toLowerCase());
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);

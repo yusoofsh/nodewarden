@@ -24,7 +24,7 @@ its own `/api/admin/*` and web vault.
 | core/accounts.rs | 32 | 0 | 5 | 6 |
 | core/ciphers.rs | 55 | 0 | 0 | 4 |
 | core/emergency_access.rs | 19 | 0 | 0 | 0 |
-| core/events.rs | 0 | 0 | 0 | 4 |
+| core/events.rs | 4 | 0 | 0 | 0 |
 | core/folders.rs | 5 | 0 | 0 | 2 |
 | core/mod.rs | 8 | 0 | 0 | 1 |
 | core/organizations.rs | 41 | 0 | 0 | 28 |
@@ -39,7 +39,7 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 189, stub 0, refused 15, unmatched 56
+Total 260: handled 193, stub 0, refused 15, unmatched 52
 
 ## Not in the Vaultwarden route list
 
@@ -74,15 +74,6 @@ Total 260: handled 189, stub 0, refused 15, unmatched 56
 - `POST /api/ciphers/<cipher_id>/attachment-admin`
 - `POST /api/ciphers/<cipher_id>/attachment/<attachment_id>/share`
 - `POST /api/ciphers/purge`
-
-</details>
-
-<details><summary>core/events.rs: unmatched (4)</summary>
-
-- `GET /api/ciphers/<cipher_id>/events`
-- `GET /api/organizations/<org_id>/events`
-- `GET /api/organizations/<org_id>/users/<member_id>/events`
-- `POST /api/collect`
 
 </details>
 
@@ -194,7 +185,7 @@ Total 260: handled 189, stub 0, refused 15, unmatched 56
 
 ## Order of work
 
-1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Not yet: purging an organization vault, the legacy `attachment-admin` and attachment share uploads, and `organization-details/assigned`.
+1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Not yet: purging an organization vault, the legacy `attachment-admin` and attachment share uploads, and `organization-details/assigned`. Slice 5 adds the event log (`scripts/events.test.ts`): organization, member, collection, group, policy and organization cipher changes are recorded, clients report views, copies and exports to `POST /events/collect`, and owners and admins read the log for an organization, a member or a cipher. Events are always on (Vaultwarden needs `ORG_EVENTS_ENABLED`), are kept `EVENTS_DAYS_RETAIN` days (365 by default, 0 for ever), and a failed write never fails the request. Personal ciphers, logins, two-factor changes and attachment uploads record no event. The continuation token is the last event's date and id, so a page boundary inside a run of equal dates neither repeats nor skips an event.
 2. Emergency access, which needs user public keys (done) and email.
 3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
 4. Duo, which needs a Duo account to test.

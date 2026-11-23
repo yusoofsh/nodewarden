@@ -41,6 +41,10 @@ export const EMERGENCY_ACCESS_COLUMNS = [
   'id', 'grantor_id', 'grantee_id', 'email', 'key_encrypted', 'type', 'status', 'wait_time_days',
   'recovery_initiated_at', 'last_notification_at', 'created_at', 'updated_at',
 ];
+export const EVENT_COLUMNS = [
+  'id', 'type', 'organization_id', 'user_id', 'cipher_id', 'collection_id', 'group_id', 'member_id', 'policy_id',
+  'acting_user_id', 'device_type', 'ip_address', 'event_date',
+];
 
 export interface BackupManifest {
   formatVersion: 1;
@@ -87,6 +91,7 @@ export interface BackupPayload {
     organization_policies?: SqlRow[];
     collection_ciphers?: SqlRow[];
     emergency_access?: SqlRow[];
+    events?: SqlRow[];
   };
 }
 
@@ -303,6 +308,7 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     organization_policies: source.organization_policies as SqlRow[] | undefined,
     collection_ciphers: source.collection_ciphers as SqlRow[] | undefined,
     emergency_access: source.emergency_access as SqlRow[] | undefined,
+    events: source.events as SqlRow[] | undefined,
   };
 }
 
@@ -614,6 +620,17 @@ export function validateBackupPayloadContents(
     if (emergencyAccessIds.has(id)) throw new Error(`Backup archive contains duplicate emergency access id: ${id}`);
     emergencyAccessIds.add(id);
   }
+
+  // Optional: archives made before the event log existed have no such key.
+  const eventIds = new Set<string>();
+  for (const row of ensureRowArray(payload.db.events || [], 'events')) {
+    const id = String(row.id || '').trim();
+    if (!id || !organizationIds.has(String(row.organization_id || '').trim())) {
+      throw new Error('Backup archive contains an invalid event row');
+    }
+    if (eventIds.has(id)) throw new Error(`Backup archive contains duplicate event id: ${id}`);
+    eventIds.add(id);
+  }
 }
 
 export async function buildBackupArchive(
@@ -635,7 +652,7 @@ export async function buildBackupArchive(
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
     organizationRows, memberRows, collectionRows, collectionMemberRows, groupRows, groupMemberRows, collectionGroupRows, policyRows,
-    collectionCipherRows, emergencyAccessRows,
+    collectionCipherRows, emergencyAccessRows, eventRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
@@ -655,6 +672,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, organization_id, type, enabled, data, updated_at FROM organization_policies ORDER BY organization_id ASC, type ASC'),
     queryRows(env.DB, 'SELECT collection_id, cipher_id FROM collection_ciphers ORDER BY collection_id ASC, cipher_id ASC'),
     queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
+    queryRows(env.DB, `SELECT ${EVENT_COLUMNS.join(', ')} FROM events ORDER BY event_date ASC, id ASC`),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
@@ -693,6 +711,7 @@ export async function buildBackupArchive(
       organization_policies: policyRows.length,
       collection_ciphers: collectionCipherRows.length,
       emergency_access: emergencyAccessRows.length,
+      events: eventRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -726,6 +745,7 @@ export async function buildBackupArchive(
       organization_policies: policyRows,
       collection_ciphers: collectionCipherRows,
       emergency_access: emergencyAccessRows,
+      events: eventRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 

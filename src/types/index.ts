@@ -19,6 +19,8 @@ export interface Env {
   YUBICO_VALIDATION_URLS?: string;
   // Optional Have I Been Pwned API key for /api/hibp/breach.
   HIBP_API_KEY?: string;
+  // Days to keep organization events; 365 when unset, 0 keeps them forever.
+  EVENTS_DAYS_RETAIN?: string;
   'globalSettings__yubico__validationUrls'?: string;
 }
 

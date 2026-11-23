@@ -452,7 +452,7 @@ test(`upgrading a ${version} database keeps personal ciphers and adopts earlier 
     await new StorageService(db).initializeDatabase();
   }
   assert.ok((await columns()).includes('organization_id'));
-  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-org-ciphers');
+  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-events');
   assert.deepEqual(
     (await rows(db, 'SELECT id, organization_id FROM ciphers ORDER BY id')).map((r) => [r.id, r.organization_id]),
     [['c-adopted', org], ['c-corrupt', null], ['c-not-member', null], ['c-personal', null]]

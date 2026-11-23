@@ -8,6 +8,7 @@ import { getPolicy, listPolicies, savePolicy, type Policy } from '../services/st
 import { policyJson } from '../utils/organization-response';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { type EventActor, EventType, logEvents } from '../services/events';
 import { isRecord, list, readBody, touchOrganization } from './organizations';
 
 // Vaultwarden's OrgPolicyType: Bitwarden's PolicyType without the types it does not support.
@@ -51,7 +52,7 @@ export async function handleGetMasterPasswordPolicy(env: Env, organizationId: st
 
 // PUT /api/organizations/{id}/policies/{type}
 // The body is `{ policy: { enabled, data } }`; a bare `{ enabled, data }` from older clients is read too.
-export async function handlePutPolicy(request: Request, env: Env, organizationId: string, type: string): Promise<Response> {
+export async function handlePutPolicy(request: Request, env: Env, organizationId: string, type: string, actor: EventActor): Promise<Response> {
   const parsed = parseType(type);
   if (parsed === null) return errorResponse(INVALID_TYPE, 400);
   const body = await readBody(request);
@@ -66,5 +67,6 @@ export async function handlePutPolicy(request: Request, env: Env, organizationId
     updatedAt: new Date().toISOString(),
   });
   await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, [{ type: EventType.PolicyUpdated, organizationId, policyId: saved.id }]);
   return jsonResponse(policyJson(saved));
 }

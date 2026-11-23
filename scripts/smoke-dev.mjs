@@ -254,6 +254,16 @@ check('the member cannot list organization details', (await call('GET', `/api/ci
 check('trash an organization cipher as admin', (await call('PUT', `/api/ciphers/${shared.json?.id}/delete-admin`, { token })).status === 200);
 check('delete organization ciphers in bulk as admin', (await call('DELETE', '/api/ciphers/admin', { token, body: { ids: [orgItem.json?.id, shared.json?.id], organizationId: teamOrg.json?.id } })).status === 204);
 check('they are gone', (await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token })).json?.data?.length === 0);
+const eventRange = `?start=2000-01-01T00:00:00.000Z&end=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`;
+const collected = await call('POST', '/events/collect', { token: secondToken, body: [{ type: 1602, organizationId: teamOrg.json?.id, date: new Date().toISOString() }] });
+check('a member reports a client event', collected.status === 200, `${collected.status} ${collected.text}`);
+const orgEventList = await call('GET', `${teamPath}/events${eventRange}`, { token });
+const eventTypes = new Set((orgEventList.json?.data || []).map((e) => e.type));
+check('the event log records organization, group and cipher changes', [1100, 1102, 1105, 1106, 1400, 1402, 1500, 1602].every((t) => eventTypes.has(t)), orgEventList.text.slice(0, 300));
+const ownEvent = (orgEventList.json?.data || []).find((e) => e.type === 1400);
+check('an event names the acting user, device type and IP', ownEvent?.actingUserId && ownEvent?.deviceType === 9 && ownEvent?.ipAddress === '198.51.100.7', JSON.stringify(ownEvent));
+check('a member cannot read the event log', (await call('GET', `${teamPath}/events${eventRange}`, { token: secondToken })).status === 400);
+check('the member event log lists their invite', (await call('GET', `${teamPath}/users/${invitedRow?.id}/events${eventRange}`, { token })).json?.data?.some((e) => e.type === 1500));
 check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
 check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
 await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });

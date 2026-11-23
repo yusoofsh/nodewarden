@@ -6,6 +6,7 @@ import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveTimedOutEmergencyAccess } from './services/storage-emergency-access-repo';
+import { pruneEvents } from './services/events';
 import {
   isBackendRequestPath,
   isWebVaultHidden,
@@ -125,6 +126,9 @@ export default {
     }));
     ctx.waitUntil(approveTimedOutEmergencyAccess(env.DB, new Date().toISOString()).catch((error) => {
       console.error('Emergency access timeout job failed:', error);
+    }));
+    ctx.waitUntil(pruneEvents(env).catch((error) => {
+      console.error('Event retention job failed:', error);
     }));
   },
 };
