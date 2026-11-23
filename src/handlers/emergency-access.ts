@@ -1,6 +1,5 @@
 import type { Env, User } from '../types';
 import { StorageService } from '../services/storage';
-import { AuthService } from '../services/auth';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import {
   EmergencyAccessStatus as Status,
@@ -16,7 +15,7 @@ import {
   type EmergencyAccess,
   type EmergencyAccessRole,
 } from '../services/storage-emergency-access-repo';
-import { cipherToResponse, isCipherResponseSyncCompatible, isValidEncString } from './ciphers';
+import { cipherToResponse, isCipherResponseSyncCompatible } from './ciphers';
 import { readNewMasterPassword, resetUserCredentials } from './master-password-reset';
 import { handleGetAttachment } from './attachments';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -213,7 +212,7 @@ export async function handleEmergencyAccessRoute(
       const found = await findEmergencyAccess(db, id, user.id, ['grantee']);
       if (!found) return notFound();
       if (!isValidRequest(found.access, Type.Takeover)) return errorResponse(NOT_VALID, 400);
-      return takeoverPassword(request, env, user, found.access.grantorId, now);
+      return takeoverPassword(request, env, user, found.access.grantorId);
     }
     case 'GET policies': {
       const found = await findEmergencyAccess(db, id, user.id, ['grantee']);
@@ -259,7 +258,7 @@ async function invite(request: Request, env: Env, user: User, now: string): Prom
 
 // The grantee sets a new master password on the grantor's account. Like Vaultwarden,
 // this also disables the grantor's two-factor methods, which would block the login.
-async function takeoverPassword(request: Request, env: Env, grantee: User, grantorId: string, now: string): Promise<Response> {
+async function takeoverPassword(request: Request, env: Env, grantee: User, grantorId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const grantor = await storage.getUserById(grantorId);
   if (!grantor) return notFound();

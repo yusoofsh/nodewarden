@@ -127,14 +127,10 @@ async function readResetPasswordPolicy(db: D1Database, organizationId: string): 
 // so the route reveals nothing about organizations the caller is not in.
 export async function handleAutoEnrollStatus(env: Env, userId: string, identifier: string): Promise<Response> {
   const organizationId = identifier.toLowerCase();
-  const member = await authorizeInvitee(env.DB, organizationId, userId);
-  const policy = member instanceof Response ? null : await readResetPasswordPolicy(env.DB, organizationId);
-  const known = !(member instanceof Response);
-  return jsonResponse({
-    id: known ? organizationId : identifier,
-    identifier: known ? organizationId : identifier,
-    resetPasswordEnabled: typeof policy === 'object' && policy !== null && policy.autoEnroll,
-  });
+  const known = !((await authorizeInvitee(env.DB, organizationId, userId)) instanceof Response);
+  const policy = known ? await readResetPasswordPolicy(env.DB, organizationId) : null;
+  const id = known ? organizationId : identifier;
+  return jsonResponse({ id, identifier: id, resetPasswordEnabled: typeof policy === 'object' && !!policy?.autoEnroll });
 }
 
 // PUT /api/organizations/{id}/users/{userId}/reset-password-enrollment
