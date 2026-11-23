@@ -62,9 +62,11 @@ function createDb(apiKey) {
         async run() {
           if (/INSERT INTO users\(/i.test(sql)) {
             state.userWrites += 1;
-            state.user.security_stamp = bindings[12];
-            state.user.api_key = bindings[24];
-            state.user.updated_at = bindings[26];
+            const cols = /INSERT INTO users\(([^)]*)\)/i.exec(sql)[1].split(',').map((c) => c.trim());
+            const bound = (name) => bindings[cols.indexOf(name)];
+            state.user.security_stamp = bound('security_stamp');
+            state.user.api_key = bound('api_key');
+            state.user.updated_at = bound('updated_at');
           }
           if (/DELETE FROM refresh_tokens/i.test(sql)) state.refreshDeletes += 1;
           if (/INSERT INTO audit_logs/i.test(sql)) state.auditActions.push(bindings[2]);
