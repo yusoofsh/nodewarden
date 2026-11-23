@@ -791,6 +791,108 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   return new Response(null, { status: 200 });
 }
 
+// POST|PUT /api/accounts/kdf
+// Changes KDF settings. The client re-derives the master key, so the request carries
+// a new auth hash and a re-wrapped user key. Accepts the legacy flat body and the
+// authenticationData/unlockData body.
+export async function handleChangeKdf(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = await request.json();
+    if (!isRecord(parsed)) return errorResponse('Invalid JSON', 400);
+    body = parsed;
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const currentHash = typeof body.masterPasswordHash === 'string' ? body.masterPasswordHash : '';
+  if (!currentHash) return errorResponse('masterPasswordHash is required', 400);
+  if (!(await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email))) {
+    return errorResponse('Invalid password', 400);
+  }
+
+  let newHash: string;
+  let newKey: string;
+  let kdfType: number | undefined;
+  let iterations: number | undefined;
+  let memory: number | undefined;
+  let parallelism: number | undefined;
+
+  if (isRecord(body.authenticationData) || isRecord(body.unlockData)) {
+    if (!isRecord(body.authenticationData) || !isRecord(body.unlockData)) {
+      return errorResponse('authenticationData and unlockData must be provided together', 400);
+    }
+    newHash = readNestedString(body, ['authenticationData', 'masterPasswordAuthenticationHash']).trim();
+    newKey = readNestedString(body, ['unlockData', 'masterKeyWrappedUserKey']).trim();
+    kdfType = readNestedNumber(body, ['authenticationData', 'kdf', 'kdfType']);
+    iterations = readNestedNumber(body, ['authenticationData', 'kdf', 'iterations']);
+    memory = readNestedNumber(body, ['authenticationData', 'kdf', 'memory']);
+    parallelism = readNestedNumber(body, ['authenticationData', 'kdf', 'parallelism']);
+    const same =
+      kdfType === readNestedNumber(body, ['unlockData', 'kdf', 'kdfType']) &&
+      iterations === readNestedNumber(body, ['unlockData', 'kdf', 'iterations']) &&
+      memory === readNestedNumber(body, ['unlockData', 'kdf', 'memory']) &&
+      parallelism === readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
+    if (!same) return errorResponse('authenticationData and unlockData must use the same KDF settings', 400);
+    const expectedSalt = user.email.trim().toLowerCase();
+    if (
+      readNestedString(body, ['authenticationData', 'salt']) !== expectedSalt ||
+      readNestedString(body, ['unlockData', 'salt']) !== expectedSalt
+    ) {
+      return errorResponse('Invalid master password salt', 400);
+    }
+  } else {
+    newHash = typeof body.newMasterPasswordHash === 'string' ? body.newMasterPasswordHash.trim() : '';
+    newKey = typeof body.key === 'string' ? body.key.trim() : '';
+    kdfType = typeof body.kdf === 'number' ? body.kdf : undefined;
+    iterations = typeof body.kdfIterations === 'number' ? body.kdfIterations : undefined;
+    memory = typeof body.kdfMemory === 'number' ? body.kdfMemory : undefined;
+    parallelism = typeof body.kdfParallelism === 'number' ? body.kdfParallelism : undefined;
+  }
+
+  if (!newHash || !newKey) return errorResponse('New master password hash and key are required', 400);
+  if (!looksLikeEncString(newKey)) return errorResponse('new key is not a valid encrypted string', 400);
+  if (kdfType === undefined || iterations === undefined) return errorResponse('KDF type and iterations are required', 400);
+  const kdfError = validateKdfParams(kdfType, iterations, memory, parallelism);
+  if (kdfError) return errorResponse(kdfError, 400);
+  if (kdfType === 0 && iterations > 2_000_000) return errorResponse('PBKDF2 iterations must be at most 2000000', 400);
+  if (kdfType === 1) {
+    if (memory === undefined || parallelism === undefined) {
+      return errorResponse('Argon2id memory and parallelism are required', 400);
+    }
+    if (iterations > 10 || memory > 1024 || parallelism > 16) {
+      return errorResponse('Argon2id parameters are above the supported maximum', 400);
+    }
+  }
+
+  user.masterPasswordHash = await auth.hashPasswordServer(newHash);
+  user.key = newKey;
+  user.kdfType = kdfType;
+  user.kdfIterations = iterations;
+  user.kdfMemory = kdfType === 1 ? memory : undefined;
+  user.kdfParallelism = kdfType === 1 ? parallelism : undefined;
+  user.securityStamp = generateUUID();
+  user.updatedAt = new Date().toISOString();
+  await storage.saveUser(user);
+  await storage.deleteRefreshTokensByUserId(user.id);
+  AuthService.invalidateUserCache(user.id);
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: 'user.kdf.change',
+    targetType: 'user',
+    targetId: user.id,
+    category: 'security',
+    level: 'security',
+    metadata: { kdfType, iterations, ...auditRequestMetadata(request) },
+  });
+  return new Response(null, { status: 200 });
+}
+
 // GET /api/accounts/totp
 export async function handleGetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
