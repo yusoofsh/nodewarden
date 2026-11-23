@@ -90,8 +90,9 @@ function generateApiKey(): string {
 }
 
 // POST /api/organizations/{id}/api-key, POST /api/organizations/{id}/rotate-api-key
-// The organization API key, created on first view. This server has no organization API login yet,
-// so the key authenticates nothing; it is kept for when it does.
+// The organization API key, created on first view. It is the client_secret of the organization
+// client_credentials login, whose token reaches only POST /api/public/organization/import.
+// Rotating it ends every token issued with the old key.
 export async function handleOrganizationApiKey(
   request: Request,
   env: Env,

@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS organization_members (
   type INTEGER NOT NULL,
   access_all INTEGER NOT NULL DEFAULT 0,
   reset_password_key TEXT,
+  external_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (organization_id, user_id),

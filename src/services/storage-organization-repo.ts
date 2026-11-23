@@ -14,6 +14,8 @@ export const isRevoked = (status: number): boolean => status < MemberStatus.Invi
 export const clientStatus = (status: number): number => (isRevoked(status) ? MemberStatus.Revoked : status);
 /** The status a member had before it was revoked, or its status. */
 export const activeStatus = (status: number): number => (isRevoked(status) ? status + REVOKED_OFFSET : status);
+/** The stored status of a member once revoked. */
+export const revokedStatus = (status: number): number => (isRevoked(status) ? status : status - REVOKED_OFFSET);
 export const MemberType = { Owner: 0, Admin: 1, User: 2, Custom: 4 } as const;
 
 export interface Organization {

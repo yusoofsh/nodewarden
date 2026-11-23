@@ -208,7 +208,11 @@ export class AuthService {
     }
 
     const payload = await verifyJWT(parts[1], this.env.JWT_SECRET);
-    if (!payload) return null;
+    // Only a user access token from createJWT passes. Other tokens signed with JWT_SECRET, such as
+    // the organization API token, lack these claims and are refused on every user route.
+    if (!payload || payload.iss !== 'nodewarden' || typeof payload.sub !== 'string' || typeof payload.sstamp !== 'string') {
+      return null;
+    }
 
     let user = await this.getCachedUser(payload.sub);
     if (!user || user.status !== 'active' || payload.sstamp !== user.securityStamp) {
