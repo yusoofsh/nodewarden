@@ -149,6 +149,7 @@ async function snapshot(db: D1Database) {
     await q('SELECT * FROM sends'), await q('SELECT * FROM attachments'), await q('SELECT * FROM refresh_tokens'),
     await q('SELECT * FROM webauthn_credentials ORDER BY id'), await q('SELECT * FROM devices ORDER BY device_identifier'),
     await q('SELECT * FROM auth_requests'), await q('SELECT * FROM user_revisions'),
+    await q('SELECT * FROM emergency_access ORDER BY id'),
   ]);
 }
 
@@ -286,4 +287,86 @@ test('a large vault rotates in a handful of statements', async () => {
   const rows = (await db.prepare("SELECT name FROM ciphers WHERE id LIKE 'eeeeeeee-%'").all<{ name: string }>()).results;
   assert.equal(rows.length, 400);
   assert.ok(rows.every((r) => r.name.startsWith('2.bmV3|n')));
+});
+
+// Two emergency contacts hold the user key wrapped with their public key: one confirmed
+// (status 2) and one mid-recovery (status 3). An accepted contact (status 1) holds none.
+async function withEmergencyContacts(db: D1Database) {
+  const grantee = '22222222-2222-2222-2222-222222222222';
+  await db
+    .prepare(
+      "INSERT INTO users(id, email, name, master_password_hash, key, kdf_type, kdf_iterations, security_stamp, role, status, created_at, updated_at) " +
+      "VALUES (?, 'grantee@example.test', 'g', 'x', 'k', 0, 600000, 's', 'user', 'active', '2026-01-01', '2026-01-01')"
+    )
+    .bind(grantee)
+    .run();
+  const rows: Array<[string, number, string | null]> = [['ea-1', 2, '4.oldwrapped'], ['ea-2', 3, '4.oldwrapped'], ['ea-3', 1, null]];
+  for (const [id, status, key] of rows) {
+    await db
+      .prepare(
+        "INSERT INTO emergency_access(id, grantor_id, grantee_id, key_encrypted, type, status, wait_time_days, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, 7, '2026-01-01', '2026-01-01')"
+      )
+      .bind(id, USER, id === 'ea-1' ? grantee : null, key, status)
+      .run();
+  }
+}
+
+test('emergency access keys are re-wrapped in the same batch', async () => {
+  const { env, db } = await setup();
+  await withEmergencyContacts(db);
+  const body = payload() as any;
+  body.accountUnlockData.emergencyAccessUnlockData = [
+    { id: 'ea-1', keyEncrypted: '4.newwrapped-1', waitTimeDays: 7 },
+    { id: 'ea-2', keyEncrypted: '4.newwrapped-2', waitTimeDays: 7 },
+  ];
+  assert.equal((await call(env, body)).status, 200);
+  const rows = (await db.prepare('SELECT id, key_encrypted FROM emergency_access ORDER BY id').all<any>()).results;
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { id: 'ea-1', key_encrypted: '4.newwrapped-1' },
+    { id: 'ea-2', key_encrypted: '4.newwrapped-2' },
+    { id: 'ea-3', key_encrypted: null },
+  ]);
+});
+
+test('a rotation that omits or nulls an emergency access key aborts with nothing changed', async () => {
+  const { env, db } = await setup();
+  await withEmergencyContacts(db);
+  const before = await snapshot(db);
+  const cases: Array<[string, unknown]> = [
+    ['omitted', [{ id: 'ea-1', keyEncrypted: '4.newwrapped-1' }]],
+    ['null key', [{ id: 'ea-1', keyEncrypted: '4.newwrapped-1' }, { id: 'ea-2', keyEncrypted: null }]],
+    ['no list', undefined],
+  ];
+  for (const [label, list] of cases) {
+    const body = payload() as any;
+    body.accountUnlockData.emergencyAccessUnlockData = list;
+    const res = await call(env, body);
+    assert.equal(res.status, 400, label);
+    assert.equal(await snapshot(db), before, `${label} must not modify anything`);
+  }
+});
+
+test('an emergency contact confirmed after the read aborts the rotation', async () => {
+  const { env, db } = await setup();
+  await withEmergencyContacts(db);
+  const before = JSON.parse(await snapshot(db));
+  const body = payload() as any;
+  body.accountUnlockData.emergencyAccessUnlockData = [
+    { id: 'ea-1', keyEncrypted: '4.newwrapped-1' },
+    { id: 'ea-2', keyEncrypted: '4.newwrapped-2' },
+  ];
+  const original = AuthService.prototype.hashPasswordServer;
+  AuthService.prototype.hashPasswordServer = async function (this: AuthService, hash: string) {
+    await db.prepare("UPDATE emergency_access SET status = 2, key_encrypted = '4.oldwrapped' WHERE id = 'ea-3'").run();
+    return original.call(this, hash);
+  };
+  try {
+    assert.equal((await call(env, body)).status, 409);
+  } finally {
+    AuthService.prototype.hashPasswordServer = original;
+  }
+  const after = JSON.parse(await snapshot(db));
+  assert.deepEqual(after[0], before[0], 'user row untouched');
+  assert.deepEqual(after[1], before[1], 'ciphers untouched');
+  assert.ok(after[10].every((r: any) => r.key_encrypted !== '4.newwrapped-1'), 'emergency keys untouched');
 });

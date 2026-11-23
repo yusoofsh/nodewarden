@@ -77,6 +77,7 @@ import {
   handleDeleteAttachment,
 } from './handlers/attachments';
 import { handleRotateUserAccountKeys } from './handlers/key-rotation';
+import { handleEmergencyAccessRoute } from './handlers/emergency-access';
 import {
   handleDeleteOwnAccount,
   handleGetTasks,
@@ -510,6 +511,9 @@ export async function handleAuthenticatedRoute(
     if (method === 'PUT' || method === 'POST') return handleUpdateDomains(request, env, userId);
     return null;
   }
+
+  const emergencyAccessResponse = await handleEmergencyAccessRoute(request, env, currentUser, path, method);
+  if (emergencyAccessResponse) return emergencyAccessResponse;
 
   const authenticatedDeviceResponse = await handleAuthenticatedDeviceRoute(request, env, userId, path, method);
   if (authenticatedDeviceResponse) return authenticatedDeviceResponse;
