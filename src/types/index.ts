@@ -21,7 +21,22 @@ export interface Env {
   HIBP_API_KEY?: string;
   // Days to keep organization events; 365 when unset, 0 keeps them forever.
   EVENTS_DAYS_RETAIN?: string;
+  // SSO (OpenID Connect). Inert unless SSO_ENABLED is true; see README.
+  SSO_ENABLED?: string;
+  SSO_ONLY?: string;
+  SSO_AUTHORITY?: string;
+  SSO_CLIENT_ID?: string;
+  SSO_CLIENT_SECRET?: string;
+  SSO_SCOPES?: string;
+  SSO_PKCE?: string;
+  SSO_SIGNUPS_MATCH_EMAIL?: string;
+  SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION?: string;
   'globalSettings__yubico__validationUrls'?: string;
+  // Outbound mail (src/services/mail.ts). Off unless MAIL_FROM and one provider are set.
+  MAIL_FROM?: string;
+  RESEND_API_KEY?: string;
+  MAIL_WEBHOOK_URL?: string;
+  MAIL_WEBHOOK_TOKEN?: string;
 }
 
 export type UserRole = 'admin' | 'user';
@@ -63,10 +78,14 @@ export interface User {
   yubikeyKey4: string | null;
   yubikeyKey5: string | null;
   yubikeyNfc: boolean;
+  // Encrypted Duo Universal Prompt settings (src/services/duo.ts); null when Duo is off.
+  duoConfig?: string | null;
   apiKey: string | null;
   // Client-reported id of the current user key (32 lowercase hex chars); metadata only.
   userKeyId?: string | null;
   avatarColor?: string | null;
+  // Address that email two-step login codes go to; null when that provider is off.
+  emailTwoFactor?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -333,7 +352,8 @@ export type AccountPasskeyChallengeScope =
   | 'CreateCredential'
   | 'UpdateKeySet'
   | 'TwoFactorAuthentication'
-  | 'TwoFactorCreate';
+  | 'TwoFactorCreate'
+  | 'DuoLogin';
 
 export interface AccountPasskeyChallenge {
   challengeHash: string;

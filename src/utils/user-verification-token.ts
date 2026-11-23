@@ -40,6 +40,33 @@ function decodeJson<T>(value: string): T | null {
   }
 }
 
+/** Signs a payload as an HS256 JWT with JWT_SECRET. Each payload type carries its own `typ`. */
+export async function signHmacToken(env: Env, payload: object): Promise<string> {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const data = `${encodeJson(header)}.${encodeJson(payload)}`;
+  const signature = bytesToBase64Url(await hmacSha256(env.JWT_SECRET, data));
+  return `${data}.${signature}`;
+}
+
+/** The payload of a token signHmacToken made, or null when the signature does not match. */
+export async function readHmacToken<T>(env: Env, token: string): Promise<T | null> {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3) return null;
+    const data = `${parts[0]}.${parts[1]}`;
+    const expected = await hmacSha256(env.JWT_SECRET, data);
+    const actual = base64UrlToBytes(parts[2]);
+    if (actual.length !== expected.length) return null;
+
+    let diff = 0;
+    for (let i = 0; i < actual.length; i += 1) diff |= actual[i] ^ expected[i];
+    if (diff !== 0) return null;
+    return decodeJson<T>(parts[1]);
+  } catch {
+    return null;
+  }
+}
+
 export async function createPasskeyUserVerificationToken(
   env: Env,
   userId: string,
@@ -54,10 +81,7 @@ export async function createPasskeyUserVerificationToken(
     iat: now,
     exp: now + USER_VERIFICATION_TOKEN_TTL_MS,
   };
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const data = `${encodeJson(header)}.${encodeJson(payload)}`;
-  const signature = bytesToBase64Url(await hmacSha256(env.JWT_SECRET, data));
-  return `${data}.${signature}`;
+  return signHmacToken(env, payload);
 }
 
 export async function verifyPasskeyUserVerificationToken(
@@ -66,24 +90,8 @@ export async function verifyPasskeyUserVerificationToken(
   userId: string,
   purpose: UserVerificationPurpose
 ): Promise<boolean> {
-  try {
-    const parts = String(token || '').split('.');
-    if (parts.length !== 3) return false;
-    const data = `${parts[0]}.${parts[1]}`;
-    const expected = await hmacSha256(env.JWT_SECRET, data);
-    const actual = base64UrlToBytes(parts[2]);
-    if (actual.length !== expected.length) return false;
-
-    let diff = 0;
-    for (let i = 0; i < actual.length; i += 1) diff |= actual[i] ^ expected[i];
-    if (diff !== 0) return false;
-
-    const payload = decodeJson<UserVerificationTokenPayload>(parts[1]);
-    if (!payload || payload.typ !== USER_VERIFICATION_TOKEN_TYPE) return false;
-    if (payload.userId !== userId || payload.purpose !== purpose || payload.method !== 'passkey') return false;
-    if (!Number.isFinite(payload.exp) || payload.exp < Date.now()) return false;
-    return true;
-  } catch {
-    return false;
-  }
+  const payload = await readHmacToken<UserVerificationTokenPayload>(env, token);
+  if (!payload || payload.typ !== USER_VERIFICATION_TOKEN_TYPE) return false;
+  if (payload.userId !== userId || payload.purpose !== purpose || payload.method !== 'passkey') return false;
+  return Number.isFinite(payload.exp) && payload.exp >= Date.now();
 }

@@ -29,7 +29,7 @@ export function buildProfileResponse(user: User, env?: Env, options: ProfileResp
     usesKeyConnector: false,
     masterPasswordHint: user.masterPasswordHint,
     culture: 'en-US',
-    twoFactorEnabled: !!user.totpSecret || isYubiKeyEnabled(user) || options.hasTwoFactorPasskey === true,
+    twoFactorEnabled: !!user.totpSecret || isYubiKeyEnabled(user) || !!user.emailTwoFactor || !!user.duoConfig || options.hasTwoFactorPasskey === true,
     yubikeyEnabled: isYubiKeyEnabled(user),
     key: user.key,
     privateKey: user.privateKey,

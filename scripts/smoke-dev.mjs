@@ -60,6 +60,20 @@ for (const path of ['/alive', '/api/alive']) {
   check(`GET ${path} returns a timestamp`, alive.status === 200 && typeof alive.json === 'string' && !Number.isNaN(Date.parse(alive.json)), `${alive.status} ${alive.text.slice(0, 60)}`);
 }
 
+// SSO is off unless SSO_ENABLED is set: its routes fall through to the authenticated router as before,
+// and the authorization_code grant stays unsupported.
+for (const [method, path] of [
+  ['GET', '/identity/sso/prevalidate'],
+  ['GET', '/identity/connect/authorize?client_id=mobile&state=s&code_challenge=c&code_challenge_method=S256'],
+  ['GET', '/identity/connect/oidc-signin?code=c&state=s'],
+  ['POST', '/api/organizations/domain/sso/verified'],
+]) {
+  const res = await call(method, path);
+  check(`${method} ${path.split('?')[0]} without SSO is 401 as before`, res.status === 401, `${res.status} ${res.text.slice(0, 100)}`);
+}
+const ssoGrant = await call('POST', '/identity/connect/token', { form: { grant_type: 'authorization_code', code: 'c', code_verifier: 'v', client_id: 'mobile' } });
+check('authorization_code grant without SSO stays unsupported', ssoGrant.status === 400 && ssoGrant.json?.error === 'unsupported_grant_type', `${ssoGrant.status} ${ssoGrant.text.slice(0, 100)}`);
+
 const reg = await register(email, 'hash-1');
 check('register', reg.status === 200, `${reg.status} ${reg.text}`);
 let session = await login(email, 'hash-1');
@@ -86,6 +100,17 @@ const profile = await call('GET', '/api/accounts/profile', { token });
 const selfId = profile.json?.id;
 const publicKey = await call('GET', `/api/users/${selfId}/public-key`, { token });
 check('public key lookup', publicKey.status === 200 && publicKey.json?.publicKey === 'cHVibGljLWtleQ==', publicKey.text);
+
+// Duo stays off until a user saves Duo settings; a bad host is refused before any request to Duo.
+const duo = await call('POST', '/api/two-factor/get-duo', { token, body: { masterPasswordHash: 'hash-1' } });
+check('get-duo reports Duo off', duo.status === 200 && duo.json?.enabled === false && duo.json?.clientSecret === null, `${duo.status} ${duo.text}`);
+const providers = await call('GET', '/api/two-factor', { token });
+check('no two-factor provider is listed', providers.status === 200 && providers.json?.Data?.length === 0, providers.text);
+const badDuo = await call('PUT', '/api/two-factor/duo', {
+  token, body: { masterPasswordHash: 'hash-1', host: 'evil.example.test', clientId: 'DIABCDEFGHIJKLMNOPQR', clientSecret: 'S'.repeat(40) },
+});
+check('a non-Duo host is refused', badDuo.status === 400, `${badDuo.status} ${badDuo.text}`);
+check('DELETE /api/two-factor/duo needs the password', (await call('DELETE', '/api/two-factor/duo', { token, body: { masterPasswordHash: 'wrong' } })).status === 400);
 
 // Key rotation: re-key the account, the folder and the cipher.
 const rotate = await call('POST', '/api/accounts/key-management/rotate-user-account-keys', {
@@ -305,7 +330,32 @@ check('the export lists the collections and the cipher in both', exported.json?.
 check('delete collections in bulk', (await call('DELETE', `${teamPath}/collections`, { token, body: { ids: [extra.json?.id] } })).status === 200);
 const apiKey = await call('POST', `${teamPath}/api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
 check('organization API key', apiKey.json?.object === 'apiKey' && apiKey.json?.apiKey?.length === 30, apiKey.text);
-check('rotate the organization API key', (await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } })).json?.apiKey !== apiKey.json?.apiKey);
+const orgLogin = (secret) => call('POST', '/identity/connect/token', {
+  form: { grant_type: 'client_credentials', client_id: `organization.${teamOrg.json?.id}`, client_secret: secret, scope: 'api.organization' },
+});
+const oldOrgToken = (await orgLogin(apiKey.json?.apiKey)).json?.access_token;
+check('log in with the organization API key', typeof oldOrgToken === 'string', '');
+const rotatedKey = await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
+check('rotate the organization API key', rotatedKey.json?.apiKey !== apiKey.json?.apiKey);
+check('the old organization key no longer logs in', (await orgLogin(apiKey.json?.apiKey)).status === 400);
+check('a token from the old key is refused', (await call('POST', '/api/public/organization/import', { token: oldOrgToken, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
+const orgToken = (await orgLogin(rotatedKey.json?.apiKey)).json?.access_token;
+check('the organization token cannot sync a vault', (await call('GET', '/api/sync', { token: orgToken })).status === 401);
+check('the organization token cannot list members', (await call('GET', `${teamPath}/users`, { token: orgToken })).status === 401);
+check('a user token cannot run the directory import', (await call('POST', '/api/public/organization/import', { token, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
+const directoryImport = await call('POST', '/api/public/organization/import', {
+  token: orgToken,
+  body: {
+    members: [{ email: email2, externalId: `ext-${run}`, deleted: false }, { email: `nobody-${run}@example.test`, externalId: `ext-nobody-${run}`, deleted: false }],
+    groups: [{ name: `Directory ${run}`, externalId: `grp-${run}`, memberExternalIds: [`ext-${run}`] }],
+    overwriteExisting: false,
+    largeImport: false,
+  },
+});
+check('the directory import runs', directoryImport.status === 200, `${directoryImport.status} ${directoryImport.text}`);
+const directoryGroup = (await call('GET', `${teamPath}/groups`, { token })).json?.data?.find((g) => g.externalId === `grp-${run}`);
+check('the import creates the group with the member', directoryGroup && JSON.stringify((await call('GET', `${teamPath}/groups/${directoryGroup.id}/users`, { token })).json) === JSON.stringify([invitedRow?.id]), JSON.stringify(directoryGroup));
+await call('DELETE', `${teamPath}/groups/${directoryGroup?.id}`, { token });
 check('enable account recovery', (await call('PUT', `${teamPath}/policies/8`, { token, body: { policy: { enabled: true, data: { autoEnrollEnabled: false } } } })).status === 200);
 check('auto-enroll status', (await call('GET', `${teamPath}/auto-enroll-status`, { token: secondToken })).json?.resetPasswordEnabled === false);
 const enrolled = await call('PUT', `${teamPath}/users/${(await call('GET', '/api/accounts/profile', { token: secondToken })).json?.id}/reset-password-enrollment`, {
@@ -396,6 +446,20 @@ check('purge needs the password', (await call('POST', '/api/ciphers/purge', { to
 check('purge the personal vault', (await call('POST', '/api/ciphers/purge', { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 200);
 const purged = await call('GET', '/api/sync', { token: grantorToken });
 check('nothing is left after the purge', purged.json?.ciphers?.length === 0 && purged.json?.folders?.length === 0, purged.text.slice(0, 300));
+
+// Mail is off unless MAIL_FROM and a provider are set (src/services/mail.ts). Unconfigured,
+// every mail-backed route keeps answering 501. Run with SMOKE_MAIL=on against a server that
+// has mail configured to skip these.
+if (process.env.SMOKE_MAIL !== 'on') {
+  for (const path of ['/api/two-factor/get-email', '/api/accounts/email-token', '/api/accounts/verify-email', '/api/accounts/request-otp']) {
+    check(`${path} is refused without mail`, (await call('POST', path, { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 501);
+  }
+  for (const path of ['/api/two-factor/send-email-login', '/api/accounts/delete-recover', '/identity/accounts/register/send-verification-email']) {
+    check(`${path} is refused without mail`, (await call('POST', path, { body: { email: 'nobody@example.test', masterPasswordHash: 'x' } })).status === 501);
+  }
+  const providers = await call('GET', '/api/two-factor', { token: grantorToken });
+  check('no email provider is listed without mail', !providers.json?.data?.some?.((p) => p.type === 1) && !providers.json?.Data?.some?.((p) => p.Type === 1), providers.text.slice(0, 200));
+}
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

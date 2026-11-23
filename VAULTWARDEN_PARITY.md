@@ -5,7 +5,7 @@ Target is Vaultwarden 1.0.0 (`src/api/**`). It is measured, not estimated:
 sends each through this server's real route handlers on an in-memory database.
 
 ```sh
-tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json]
+tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json] [--sso]
 ```
 
 - **Handled**: a handler answers the route. A 404 for the sample id still counts.
@@ -21,96 +21,38 @@ its own `/api/admin/*` and web vault.
 
 | Vaultwarden file | Handled | Stub | Refused (405/501) | Unmatched |
 |---|---|---|---|---|
-| core/accounts.rs | 35 | 0 | 8 | 0 |
+| core/accounts.rs | 41 | 0 | 2 | 0 |
 | core/ciphers.rs | 59 | 0 | 0 | 0 |
 | core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 4 | 0 | 0 | 0 |
 | core/folders.rs | 7 | 0 | 0 | 0 |
 | core/mod.rs | 9 | 0 | 0 | 0 |
-| core/organizations.rs | 68 | 0 | 0 | 1 |
-| core/public.rs | 0 | 0 | 0 | 1 |
+| core/organizations.rs | 69 | 0 | 0 | 0 |
+| core/public.rs | 1 | 0 | 0 | 0 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
-| core/two_factor/duo.rs | 0 | 0 | 0 | 4 |
-| core/two_factor/email.rs | 0 | 0 | 5 | 0 |
+| core/two_factor/duo.rs | 4 | 0 | 0 | 0 |
+| core/two_factor/email.rs | 5 | 0 | 0 | 0 |
 | core/two_factor/mod.rs | 3 | 0 | 0 | 0 |
-| core/two_factor/protected_actions.rs | 0 | 0 | 2 | 0 |
+| core/two_factor/protected_actions.rs | 2 | 0 | 0 | 0 |
 | core/two_factor/webauthn.rs | 6 | 0 | 0 | 0 |
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
-| identity.rs | 3 | 0 | 3 | 4 |
+| identity.rs | 10 | 0 | 0 | 0 |
 
-Total 260: handled 232, stub 0, refused 18, unmatched 10
+Total 260: handled 258, stub 0, refused 2, unmatched 0
+
+Measured with `--mail` and `--sso`, which configure an email provider and an OpenID provider. Both are off unless an operator sets them (`RESEND_API_KEY` or `MAIL_WEBHOOK_URL` for mail, `SSO_ENABLED` for SSO). Without `--mail` the email-backed routes answer 501 and the run reports handled 242 and refused 18. Without either flag it reports handled 237, refused 18 and unmatched 5, because the four SSO routes fall through. Duo needs no flag: its routes answer for every user, and Duo only signs in once a user saves a configuration.
 
 ## Not in the Vaultwarden route list
 
-- **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
+- **SSO.** OpenID Connect sign-in (authorization code with PKCE) serves `/identity/sso/prevalidate`, `/identity/connect/authorize`, `/identity/connect/oidc-signin`, `POST /api/organizations/domain/sso/verified` and the `authorization_code` grant, only when `SSO_ENABLED` is set. It signs in to existing accounts, which unlock with their master password. It refuses what Vaultwarden does beyond that: creating an account through SSO (Vaultwarden then needs `set-password`, which answers 501 here), web and browser clients (they finish on the official web vault's `sso-connector.html`), sessions tied to IdP tokens (Vaultwarden's default; this server issues its own tokens, as with `SSO_AUTH_ONLY_NOT_SESSION`), `SSO_AUDIENCE_TRUSTED`, `SSO_MASTER_PASSWORD_POLICY`, trusted-device encryption and key connector. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
 - **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete or hibp. They serve official clients only. Organization features need web vault screens too.
 
 ## Unhandled and refused routes
 
-<details><summary>core/accounts.rs: refused (8)</summary>
+<details><summary>core/accounts.rs: refused (2)</summary>
 
-- `POST /api/accounts/delete-recover-token` (answers 501)
-- `POST /api/accounts/delete-recover` (answers 501)
-- `POST /api/accounts/email-token` (answers 501)
-- `POST /api/accounts/email` (answers 501)
-- `POST /api/accounts/key-management/rotate-user-keys` (answers 501)
-- `POST /api/accounts/set-password` (answers 501)
-- `POST /api/accounts/verify-email-token` (answers 501)
-- `POST /api/accounts/verify-email` (answers 501)
-
-</details>
-
-<details><summary>core/organizations.rs: unmatched (1)</summary>
-
-- `POST /api/organizations/domain/sso/verified`
-
-</details>
-
-<details><summary>core/public.rs: unmatched (1)</summary>
-
-- `POST /api/public/organization/import`
-
-</details>
-
-<details><summary>core/two_factor/duo.rs: unmatched (4)</summary>
-
-- `DELETE /api/two-factor/duo`
-- `POST /api/two-factor/duo`
-- `POST /api/two-factor/get-duo`
-- `PUT /api/two-factor/duo`
-
-</details>
-
-<details><summary>core/two_factor/email.rs: refused (5)</summary>
-
-- `DELETE /api/two-factor/email` (answers 501)
-- `POST /api/two-factor/get-email` (answers 501)
-- `POST /api/two-factor/send-email-login` (answers 501)
-- `POST /api/two-factor/send-email` (answers 501)
-- `PUT /api/two-factor/email` (answers 501)
-
-</details>
-
-<details><summary>core/two_factor/protected_actions.rs: refused (2)</summary>
-
-- `POST /api/accounts/request-otp` (answers 501)
-- `POST /api/accounts/verify-otp` (answers 501)
-
-</details>
-
-<details><summary>identity.rs: refused (3)</summary>
-
-- `POST /identity/accounts/register/finish` (answers 501)
-- `POST /identity/accounts/register/send-verification-email` (answers 501)
-- `POST /identity/accounts/register/verification-email-clicked` (answers 501)
-
-</details>
-
-<details><summary>identity.rs: unmatched (4)</summary>
-
-- `GET /identity/connect/authorize`
-- `GET /identity/connect/oidc-signin`
-- `GET /identity/sso/prevalidate`
+- `POST /api/accounts/key-management/rotate-user-keys` (answers 501, V2 key rotation is not implemented; V1 rotation works)
+- `POST /api/accounts/set-password` (answers 501, SSO account creation is not supported)
 
 </details>

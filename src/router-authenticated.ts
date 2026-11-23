@@ -1,5 +1,6 @@
 import type { Env, User } from './types';
 import { errorResponse, jsonResponse, unsupportedResponse } from './utils/response';
+import { handleMailAuthenticatedRoute } from './handlers/email-auth';
 import {
   handleGetProfile,
   handleUpdateProfile,
@@ -25,9 +26,12 @@ import {
   handleGetDeviceVerificationSettings,
   handlePutDeviceVerificationSettings,
   handleDisableTwoFactorProvider,
+  handleGetTwoFactorDuo,
+  handlePutTwoFactorDuo,
   handleGetApiKey,
   handleRotateApiKey,
 } from './handlers/accounts';
+import { TWO_FACTOR_PROVIDER_DUO } from './services/duo';
 import {
   handleGetCiphers,
   handleGetCipher,
@@ -159,6 +163,8 @@ export async function handleAuthenticatedRoute(
     '/accounts/email',
   ]);
   if (mailBackedAccountPaths.has(path) && (method === 'POST' || method === 'PUT')) {
+    const mailResponse = await handleMailAuthenticatedRoute(request, env, currentUser, path, method);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email delivery is not supported by this server.');
   }
 
@@ -173,6 +179,8 @@ export async function handleAuthenticatedRoute(
     '/two-factor/email',
   ]);
   if (emailTwoFactorPaths.has(path) && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
+    const mailResponse = await handleMailAuthenticatedRoute(request, env, currentUser, path, method);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email two-step login is not supported by this server.');
   }
 
@@ -264,6 +272,15 @@ export async function handleAuthenticatedRoute(
 
   if ((path === '/api/two-factor/yubikey/bootstrap' || path === '/api/two-factor/yubi-key/bootstrap') && method === 'POST') {
     return handleBootstrapTwoFactorYubiKeyConfig(request, env, userId);
+  }
+
+  if (path === '/api/two-factor/get-duo' && method === 'POST') {
+    return handleGetTwoFactorDuo(request, env, userId);
+  }
+
+  if (path === '/api/two-factor/duo') {
+    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorDuo(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, TWO_FACTOR_PROVIDER_DUO);
   }
 
   if (path === '/api/two-factor/disable' && (method === 'PUT' || method === 'POST')) {

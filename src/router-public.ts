@@ -13,6 +13,7 @@ import {
   handleFillAssistManifest,
 } from './handlers/fill-assist';
 import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
+import { handleOrganizationImport } from './handlers/organization-import';
 import { handleGetAccountPasskeyAssertionOptions } from './handlers/account-passkeys';
 import {
   handleRegister,
@@ -33,10 +34,12 @@ import {
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
+import { handleMailPublicRoute } from './handlers/email-auth';
 import { StorageService } from './services/storage';
 import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins } from './utils/origins';
 import { buildConfigResponse } from './config-response';
+import { handleSsoPublicRoute } from './services/sso';
 
 type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
@@ -395,9 +398,19 @@ export async function handlePublicRoute(
     return handleGetAuthRequestResponse(request, env, authRequestResponseMatch[1]);
   }
 
+  // Authenticated by an organization API token, which the user routes behind this router refuse.
+  if (path === '/api/public/organization/import' && method === 'POST') {
+    const blocked = await enforcePublicRateLimit();
+    if (blocked) return blocked;
+    return handleOrganizationImport(request, env);
+  }
+
   if (path === '/identity/connect/token' && method === 'POST') {
     return handleToken(request, env);
   }
+
+  const ssoResponse = await handleSsoPublicRoute(request, env, path, method, enforcePublicRateLimit);
+  if (ssoResponse) return ssoResponse;
 
   if (path === '/api/devices/knowndevice' && method === 'GET') {
     const blocked = await enforcePublicRateLimit();
@@ -465,6 +478,8 @@ export async function handlePublicRoute(
   if (publicMailBackedPaths.has(path) && method === 'POST') {
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
     if (blocked) return blocked;
+    const mailResponse = await handleMailPublicRoute(request, env, path);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email delivery is not supported by this server.');
   }
 

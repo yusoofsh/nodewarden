@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS users (
   api_key TEXT,
   user_key_id TEXT,
   avatar_color TEXT,
+  email_2fa TEXT,
+  duo_config TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -309,6 +311,7 @@ CREATE TABLE IF NOT EXISTS organization_members (
   type INTEGER NOT NULL,
   access_all INTEGER NOT NULL DEFAULT 0,
   reset_password_key TEXT,
+  external_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (organization_id, user_id),
@@ -462,3 +465,41 @@ CREATE INDEX IF NOT EXISTS idx_events_cipher_date
   ON events(cipher_id, event_date);
 CREATE INDEX IF NOT EXISTS idx_events_date
   ON events(event_date);
+
+-- Short-lived codes and link tokens sent by email. Runtime state: not exported in backups.
+CREATE TABLE IF NOT EXISTS email_codes (
+  user_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  email TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, purpose),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+-- SSO (OpenID Connect). sso_users links one IdP identity to one account; sso_auth holds one
+-- sign-in in progress for ten minutes and is runtime auth state, never backed up.
+CREATE TABLE IF NOT EXISTS sso_users (
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  user_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (issuer, subject),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS sso_auth (
+  state TEXT PRIMARY KEY,
+  client_challenge TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  idp_verifier TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  callback_uri TEXT NOT NULL,
+  binding_hash TEXT NOT NULL,
+  code_hash TEXT UNIQUE,
+  error TEXT,
+  identity TEXT,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sso_auth_expires
+  ON sso_auth(expires_at);

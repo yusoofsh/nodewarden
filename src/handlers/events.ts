@@ -7,7 +7,7 @@ import { StorageService } from '../services/storage';
 import {
   EventType,
   PAGE_SIZE,
-  type EventActor,
+  type UserEventActor,
   type EventRange,
   type OrgEvent,
   type StoredEvent,
@@ -109,7 +109,7 @@ const isClientCipherEvent = (type: number) =>
 // Accepts only the event types clients report; the rest are written by the server. The organization
 // of a cipher event is the cipher's, after checking the caller can reach it; an organization event
 // needs the caller's confirmed membership. Anything else is dropped without an error.
-export async function handleCollectEvents(request: Request, env: Env, actor: EventActor): Promise<Response> {
+export async function handleCollectEvents(request: Request, env: Env, actor: UserEventActor): Promise<Response> {
   let body: unknown;
   try {
     body = await request.json();

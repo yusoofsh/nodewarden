@@ -13,6 +13,7 @@ const forbiddenRuntimeTables = [
   'trusted_two_factor_device_tokens',
   'account_passkey_challenges',
   'used_attachment_download_tokens',
+  'email_codes',
 ];
 
 function assert(condition, message) {

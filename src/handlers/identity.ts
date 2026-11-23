@@ -25,11 +25,17 @@ import {
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
+import { ORG_API_SCOPE, ORG_API_TOKEN_TTL_SECONDS, createOrgApiToken } from '../utils/org-api-token';
+import { getOrganizationApiKey } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
+import { consumeEmailCode, obscureEmail } from '../services/email-codes';
+import { TWO_FACTOR_PROVIDER_DUO, duoClientName, hasDuoConfig, readDuoCredentials, startDuoLogin, verifyDuoLogin, type DuoLoginContext } from '../services/duo';
+import { isSsoOnly, readSsoSetting, redeemSsoLogin, resolveSsoLogin, type SsoLogin } from '../services/sso';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_REMEMBER = 5;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
@@ -157,7 +163,7 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
+export async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
   const subjectHash = await sha256Hex(`${grantType}:${String(subject || '').trim() || 'unknown'}`);
   return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
 }
@@ -245,7 +251,8 @@ async function twoFactorRequiredResponse(
   env: Env,
   storage: StorageService,
   user?: User,
-  message: string = 'Two factor required.'
+  message: string = 'Two factor required.',
+  duoLogin?: Omit<DuoLoginContext, 'credentials'>
 ): Promise<Response> {
   // Match Bitwarden Identity: TwoFactorProviders2 lists enabled 2FA providers only.
   // Clients expose recovery-code entry points themselves; Android 2026.4 fails to
@@ -254,17 +261,29 @@ async function twoFactorRequiredResponse(
   let webAuthnOptions: Record<string, unknown> | null = null;
   if (!user || resolveTotpSecret(user.totpSecret)) providers.push(String(TWO_FACTOR_PROVIDER_AUTHENTICATOR));
   if (user && isYubiKeyEnabled(user)) providers.push(String(TWO_FACTOR_PROVIDER_YUBIKEY));
+  if (user?.emailTwoFactor) providers.push(String(TWO_FACTOR_PROVIDER_EMAIL));
   if (user) {
     webAuthnOptions = await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null;
     if (webAuthnOptions) providers.push(String(TWO_FACTOR_PROVIDER_WEBAUTHN));
+  }
+  // Duo is offered only when its prompt can start; other providers stay usable when Duo is down.
+  let duoAuthUrl: string | null = null;
+  if (user && duoLogin && hasDuoConfig(user)) {
+    const credentials = await readDuoCredentials(env, user);
+    duoAuthUrl = credentials ? await startDuoLogin({ ...duoLogin, credentials }).catch(() => null) : null;
+    if (duoAuthUrl) providers.push(String(TWO_FACTOR_PROVIDER_DUO));
   }
   const providers2: Record<string, Record<string, unknown> | null> = {};
   for (const provider of providers) {
     providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
       ? { Nfc: user?.yubikeyNfc ?? false }
-      : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
+      : provider === String(TWO_FACTOR_PROVIDER_EMAIL) && user?.emailTwoFactor
+        ? { Email: obscureEmail(user.emailTwoFactor) }
+        : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
         ? webAuthnOptions
-        : null;
+        : provider === String(TWO_FACTOR_PROVIDER_DUO)
+          ? { AuthUrl: duoAuthUrl }
+          : null;
   }
   const customResponse = {
     TwoFactorProviders: providers,
@@ -327,6 +346,55 @@ async function recordFailedTwoFactorAndBuildResponse(
   return identityErrorResponse('Two-step token is invalid. Try again.', 'invalid_grant', 400);
 }
 
+// client_credentials with client_id organization.<id>, after Vaultwarden's organization_api_key_login.
+// The token reaches only POST /api/public/organization/import. As there, no device and no refresh
+// token: the Directory Connector logs in again when it expires. An unknown organization and a wrong
+// secret get the same answer and both count toward the lockout.
+async function organizationApiKeyLogin(
+  request: Request,
+  env: Env,
+  rateLimit: RateLimitService,
+  clientIdentifier: string,
+  clientId: string,
+  clientSecret: string | undefined,
+  scope: string | undefined
+): Promise<Response> {
+  const orgId = clientId.slice('organization.'.length).toLowerCase();
+  if (scope !== ORG_API_SCOPE || !orgId || !clientSecret) {
+    return identityErrorResponse('Parameter error', 'invalid_request', 400);
+  }
+  const loginIdentifier = await loginRateLimitKey(clientIdentifier, 'client_credentials', `organization.${orgId}`);
+  const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
+  if (!loginCheck.allowed) {
+    return identityErrorResponse(
+      `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
+      'TooManyRequests',
+      429
+    );
+  }
+
+  const key = await getOrganizationApiKey(env.DB, orgId);
+  const audit = {
+    category: 'auth' as const,
+    targetType: 'organization',
+    targetId: orgId,
+    metadata: { grantType: 'client_credentials', ...auditRequestMetadata(request) },
+  };
+  if (!key || !(await verifyApiKey(clientSecret, key.apiKey))) {
+    await safeWriteAuditEvent(env, { ...audit, action: 'auth.login.failed.bad_org_api_key', level: 'warn' });
+    return recordFailedLoginAndBuildResponse(rateLimit, loginIdentifier, 'ClientId or clientSecret is incorrect. Try again');
+  }
+
+  await rateLimit.clearLoginAttempts(loginIdentifier);
+  await safeWriteAuditEvent(env, { ...audit, action: 'auth.login.success.org_api_key', level: 'info' });
+  return identityJsonResponse({
+    access_token: await createOrgApiToken(env, orgId, key.revisionDate),
+    expires_in: ORG_API_TOKEN_TTL_SECONDS,
+    token_type: 'Bearer',
+    scope: ORG_API_SCOPE,
+  });
+}
+
 // POST /identity/connect/token
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -364,17 +432,26 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     );
   }
 
-  if (grantType === 'password') {
+  // SSO (authorization_code) shares the password grant from the account lookup on: 2FA, device and tokens.
+  // While SSO is off the grant stays unsupported, as before.
+  let ssoLogin: SsoLogin | null = null;
+  if (grantType === 'authorization_code' && readSsoSetting(env).state !== 'off') {
+    const resolved = await resolveSsoLogin(env, body);
+    if ('error' in resolved) return identityErrorResponse(resolved.error, 'invalid_grant', 400);
+    ssoLogin = resolved;
+  }
+
+  if (grantType === 'password' || ssoLogin) {
     // Login with password
-    const email = body.username?.toLowerCase();
+    const email = ssoLogin ? ssoLogin.user.email : body.username?.toLowerCase();
     const passwordHash = body.password;
-    const authRequestId = readBodyValue(body, ['authRequest', 'AuthRequest']);
+    const authRequestId = ssoLogin ? undefined : readBodyValue(body, ['authRequest', 'AuthRequest']);
     const twoFactorToken = readBodyValue(body, ['twoFactorToken', 'TwoFactorToken']);
     const twoFactorProvider = readBodyValue(body, ['twoFactorProvider', 'TwoFactorProvider']);
     const twoFactorRemember = readBodyValue(body, ['twoFactorRemember', 'TwoFactorRemember']);
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
-    if (!email || !passwordHash) {
+    if (!email || (!passwordHash && !ssoLogin)) {
       // Bitwarden clients expect OAuth-style error fields.
       return identityErrorResponse('Email and password are required', 'invalid_request', 400);
     }
@@ -390,12 +467,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const user = await storage.getUser(email);
+    const user = ssoLogin ? ssoLogin.user : await storage.getUser(email);
     let validatedAuthRequestId: string | null = null;
     let authRequestLoginKey: string | null = null;
     let valid = false;
     const normalizedAuthRequestId = String(authRequestId || '').trim();
-    if (normalizedAuthRequestId) {
+    if (ssoLogin) {
+      valid = user!.status === 'active';
+    } else if (normalizedAuthRequestId) {
       // Auth-request grants carry an access code, not a password hash. Pay the
       // same KDF cost and perform the lookup even when the account is missing.
       await auth.performDummyPasswordWork(passwordHash);
@@ -443,13 +522,24 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         'Username or password is incorrect. Try again'
       );
     }
+    // SSO_ONLY refuses password sign-in, after the password check so it reveals nothing. Admins keep it as
+    // the escape hatch against a broken IdP or an unlinked account.
+    if (!ssoLogin && isSsoOnly(env) && user.role !== 'admin') {
+      return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
+    }
 
     // Optional 2FA: enabled by any supported per-user provider.
     let trustedTwoFactorTokenToReturn: string | undefined;
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const effectiveWebAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0) {
+    const duoLogin = {
+      env, storage, request, user,
+      clientName: duoClientName(body.client_id),
+      deviceIdentifier: deviceInfo.deviceIdentifier || '',
+    };
+    // Email 2FA stays required when mail is later unconfigured; the recovery code still works.
+    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0 || hasDuoConfig(user) || user.emailTwoFactor) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
       const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
       let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
@@ -459,7 +549,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream-compatible behavior: if 2FA is required and either provider or token is missing,
       // respond with a 2FA challenge payload.
       if (!hasProvider || !hasToken) {
-        return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+        return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.', duoLogin);
       }
 
       let passedByRememberToken = false;
@@ -474,7 +564,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
         // Remember token missing/invalid/expired should re-enter the 2FA challenge flow.
         if (!passedByRememberToken) {
-          return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+          return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.', duoLogin);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
@@ -506,6 +596,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!initializedWithCurrentOtp && !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
+      } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_EMAIL)) {
+        if (!user.emailTwoFactor || !(await consumeEmailCode(env, user.id, 'login', normalizedTwoFactorToken))) {
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {
         if (!effectiveWebAuthnCredentials.length) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
@@ -519,6 +613,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         try {
           await assertTwoFactorPasskeyCredential(request, env, storage, user, deviceResponse);
         } catch {
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        }
+      } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_DUO)) {
+        const credentials = await readDuoCredentials(env, user);
+        if (!credentials || !await verifyDuoLogin({ ...duoLogin, credentials }, normalizedTwoFactorToken)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
       } else if (
@@ -536,9 +635,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         user.yubikeyKey4 = null;
         user.yubikeyKey5 = null;
         user.yubikeyNfc = false;
+        user.duoConfig = null;
         for (const credential of effectiveWebAuthnCredentials) {
           await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
         }
+        if (user.emailTwoFactor) await storage.setEmailTwoFactor(user.id, null);
         user.totpRecoveryCode = createRecoveryCode();
         user.securityStamp = generateUUID();
         user.updatedAt = new Date().toISOString();
@@ -563,7 +664,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       }
     }
 
-    if (!normalizedAuthRequestId) {
+    if (ssoLogin && !(await redeemSsoLogin(env, ssoLogin))) {
+      return identityErrorResponse('Invalid code', 'invalid_grant', 400);
+    }
+    if (!normalizedAuthRequestId && !ssoLogin) {
       await auth.upgradePasswordVerifier(user, passwordHash);
     }
 
@@ -749,6 +853,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const clientSecret = body.client_secret;
     const scope = body.scope;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
+
+    if (typeof clientId === 'string' && clientId.startsWith('organization.')) {
+      return organizationApiKeyLogin(request, env, rateLimit, clientIdentifier!, clientId, clientSecret, scope);
+    }
 
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);
     if (!parmValid) {
