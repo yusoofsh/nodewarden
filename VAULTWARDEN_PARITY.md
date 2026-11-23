@@ -10,7 +10,7 @@ tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vault
 
 - **Handled**: a handler answers the route. A 404 for the sample id still counts.
 - **Stub**: a catch-all answers every GET with an empty list (`/api/policies`). The feature does not exist.
-- **Refused**: the server answers 405 or 501 on purpose (email-backed routes, set-password).
+- **Refused**: the server answers 405 or 501 on purpose (email-backed routes, set-password, V2-only key rotation).
 - **Unmatched**: no handler claims the route.
 
 "Handled" means the route exists, not that an official client was run against it.
@@ -21,25 +21,25 @@ its own `/api/admin/*` and web vault.
 
 | Vaultwarden file | Handled | Stub | Refused (405/501) | Unmatched |
 |---|---|---|---|---|
-| core/accounts.rs | 32 | 0 | 5 | 6 |
-| core/ciphers.rs | 55 | 0 | 0 | 4 |
+| core/accounts.rs | 35 | 0 | 8 | 0 |
+| core/ciphers.rs | 59 | 0 | 0 | 0 |
 | core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 4 | 0 | 0 | 0 |
-| core/folders.rs | 5 | 0 | 0 | 2 |
-| core/mod.rs | 8 | 0 | 0 | 1 |
-| core/organizations.rs | 68 | 0 | 0 | 1 |
+| core/folders.rs | 7 | 0 | 0 | 0 |
+| core/mod.rs | 9 | 0 | 0 | 0 |
+| core/organizations.rs | 41 | 0 | 0 | 28 |
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
 | core/two_factor/duo.rs | 0 | 0 | 0 | 4 |
 | core/two_factor/email.rs | 0 | 0 | 5 | 0 |
-| core/two_factor/mod.rs | 2 | 0 | 0 | 1 |
+| core/two_factor/mod.rs | 3 | 0 | 0 | 0 |
 | core/two_factor/protected_actions.rs | 0 | 0 | 2 | 0 |
-| core/two_factor/webauthn.rs | 5 | 0 | 0 | 1 |
+| core/two_factor/webauthn.rs | 6 | 0 | 0 | 0 |
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 220, stub 0, refused 15, unmatched 25
+Total 260: handled 205, stub 0, refused 18, unmatched 37
 
 ## Not in the Vaultwarden route list
 
@@ -48,57 +48,55 @@ Total 260: handled 220, stub 0, refused 15, unmatched 25
 
 ## Unhandled and refused routes
 
-<details><summary>core/accounts.rs: refused (5)</summary>
+<details><summary>core/accounts.rs: refused (8)</summary>
 
-- `POST /api/accounts/email-token`
-- `POST /api/accounts/profile`
+- `POST /api/accounts/delete-recover` (mail)
+- `POST /api/accounts/delete-recover-token` (mail)
+- `POST /api/accounts/email` (mail: the token goes to the new address)
+- `POST /api/accounts/email-token` (mail)
+- `POST /api/accounts/key-management/rotate-user-keys` (Vaultwarden takes only V2 account keys here; this server stores V1 keys and rotates through `rotate-user-account-keys`)
 - `POST /api/accounts/set-password`
-- `POST /api/accounts/verify-email`
-- `POST /api/accounts/verify-email-token`
+- `POST /api/accounts/verify-email` (mail)
+- `POST /api/accounts/verify-email-token` (mail)
 
 </details>
 
-<details><summary>core/accounts.rs: unmatched (6)</summary>
+<details><summary>core/organizations.rs: unmatched (28)</summary>
 
-- `GET /api/accounts/key-management/key-rotation-data`
-- `POST /api/accounts/delete-recover`
-- `POST /api/accounts/delete-recover-token`
-- `POST /api/accounts/email`
-- `POST /api/accounts/key-management/rotate-user-keys`
-- `PUT /api/accounts/avatar`
-
-</details>
-
-<details><summary>core/ciphers.rs: unmatched (4)</summary>
-
-- `POST /api/ciphers/<cipher_id>/attachment-admin`
-- `POST /api/ciphers/<cipher_id>/attachment/<attachment_id>/share`
-- `POST /api/ciphers/purge`
-
-</details>
-
-<details><summary>core/folders.rs: unmatched (2)</summary>
-
-- `POST /api/folders/<folder_id>`
-- `POST /api/folders/<folder_id>/delete`
-
-</details>
-
-<details><summary>core/mod.rs: unmatched (1)</summary>
-
-- `GET /api/now`
-
-</details>
-
-<details><summary>core/organizations.rs: unmatched (1)</summary>
-
-- `POST /api/organizations/domain/sso/verified` (SSO is not offered)
+- `DELETE /api/organizations/<org_id>/collections`
+- `GET /api/ciphers/organization-details/assigned`
+- `GET /api/organizations/<_org_id>/billing/vnext/self-host/metadata`
+- `GET /api/organizations/<_org_id>/billing/vnext/warnings`
+- `GET /api/organizations/<identifier>/auto-enroll-status`
+- `GET /api/organizations/<org_id>/collections/<col_id>/details`
+- `GET /api/organizations/<org_id>/collections/<col_id>/users`
+- `GET /api/organizations/<org_id>/export`
+- `GET /api/organizations/<org_id>/private-key`
+- `GET /api/organizations/<org_id>/users/<member_id>/reset-password-details`
+- `GET /api/organizations/<org_id>/users/keys/pending-v2-upgrades`
+- `GET /api/organizations/<org_id>/users/mini-details`
+- `GET /api/plans`
+- `POST /api/ciphers/bulk-collections`
+- `POST /api/ciphers/import-organization`
+- `POST /api/organizations/<org_id>/api-key`
+- `POST /api/organizations/<org_id>/collections/bulk-access`
+- `POST /api/organizations/<org_id>/keys`
+- `POST /api/organizations/<org_id>/rotate-api-key`
+- `POST /api/organizations/<org_id>/users/keys/v2-upgrades`
+- `POST /api/organizations/domain/sso/verified`
+- `PUT /api/organizations/<org_id>/users/<member_id>/recover-account`
+- `PUT /api/organizations/<org_id>/users/<member_id>/restore`
+- `PUT /api/organizations/<org_id>/users/<member_id>/restore/vnext`
+- `PUT /api/organizations/<org_id>/users/<member_id>/revoke`
+- `PUT /api/organizations/<org_id>/users/<user_id>/reset-password-enrollment`
+- `PUT /api/organizations/<org_id>/users/restore`
+- `PUT /api/organizations/<org_id>/users/revoke`
 
 </details>
 
 <details><summary>core/public.rs: unmatched (1)</summary>
 
-- `POST /api/public/organization/import` (needs an organization API login with client credentials, which this server does not have)
+- `POST /api/public/organization/import`
 
 </details>
 
@@ -121,22 +119,10 @@ Total 260: handled 220, stub 0, refused 15, unmatched 25
 
 </details>
 
-<details><summary>core/two_factor/mod.rs: unmatched (1)</summary>
-
-- `GET /api/two-factor/get-device-verification-settings`
-
-</details>
-
 <details><summary>core/two_factor/protected_actions.rs: refused (2)</summary>
 
 - `POST /api/accounts/request-otp`
 - `POST /api/accounts/verify-otp`
-
-</details>
-
-<details><summary>core/two_factor/webauthn.rs: unmatched (1)</summary>
-
-- `DELETE /api/two-factor/webauthn/all`
 
 </details>
 
@@ -158,7 +144,7 @@ Total 260: handled 220, stub 0, refused 15, unmatched 25
 
 ## Order of work
 
-1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Not yet: purging an organization vault, and the legacy `attachment-admin` and attachment share uploads. Slice 5 adds the event log (`scripts/events.test.ts`): organization, member, collection, group, policy and organization cipher changes are recorded, clients report views, copies and exports to `POST /events/collect`, and owners and admins read the log for an organization, a member or a cipher. Events are always on (Vaultwarden needs `ORG_EVENTS_ENABLED`), are kept `EVENTS_DAYS_RETAIN` days (365 by default, 0 for ever), and a failed write never fails the request. Personal ciphers, logins, two-factor changes and attachment uploads record no event. The continuation token is the last event's date and id, so a page boundary inside a run of equal dates neither repeats nor skips an event. Slice 6 adds the remaining organization admin routes (`scripts/org-admin.test.ts`): revoking and restoring members (a revoked member keeps its earlier status minus 128, as in Vaultwarden, reads as -1 and loses every access until restored), collection details, users, bulk access and bulk delete, `organization-details/assigned`, bulk collection changes on ciphers, organization import and export, setting the organization key pair and reading its private key, the organization API key, account recovery, the plan and billing routes, and the V2 account recovery upgrade routes. Account recovery works without mail, unlike Vaultwarden, which refuses it then: enrolling needs the Account recovery administration policy and the member's master password, owners recover any member and admins any member but owners, and a key rotation must re-wrap every enrolled organization's recovery key. The member gets no email and only notices by being logged out; admins see the recovery in the event log. The API key is stored and rotated but authenticates nothing, since there is no organization API login. No V2 upgrade tokens are kept, so `pending-v2-upgrades` is always empty and `v2-upgrades` checks its request and changes nothing.
+1. Organizations, as vertical slices. Slice 1 is in the API only, with no web vault screen and not yet run against an official client: create, rename, delete and leave an organization, collections, the member list, and organizations and collections in profile and sync. Every organization route goes through `src/services/org-access.ts`, and `scripts/organizations.test.ts` tests each route against each role. Slice 2 adds members: invite an existing account, accept from the invitee's own session (mail is off, so there is no token; `authorizeOwnMembership` in the same file authorizes it), confirm with the wrapped organization key, reinvite, role and collection changes, and removal. Custom roles are not offered. Slice 3 adds groups (their collection access reaches members' sync) and policies, which are stored and served, including in sync, but not enforced by the server. `GET /api/organizations/invitations`, which is not a Bitwarden route, lists the caller's pending invites so the invitee can find the member id to accept. The SSO placeholder organization `00000000-01DC-…/policies/master-password` counts as handled but answers 404, since SSO is not offered. Slice 4 adds organization ciphers: create in collections, share personal items one at a time or in bulk, change an item's collections, the `-admin` cipher and attachment routes, and the admin console listing at `/api/ciphers/organization-details`. Access comes from a confirmed membership: owners, admins and access-all members see every item, other members see the items in their collections, direct or through groups. `scripts/org-ciphers.test.ts` covers each. Folders, favorites and archiving stay per user and are not stored for organization items, and the NodeWarden web vault leaves organization items out because it has no organization keys. Purging an organization vault (owners only, logged as event 1601) and the legacy multipart `attachment-admin` and attachment share uploads came later. Not yet: `organization-details/assigned`. Slice 5 adds the event log (`scripts/events.test.ts`): organization, member, collection, group, policy and organization cipher changes are recorded, clients report views, copies and exports to `POST /events/collect`, and owners and admins read the log for an organization, a member or a cipher. Events are always on (Vaultwarden needs `ORG_EVENTS_ENABLED`), are kept `EVENTS_DAYS_RETAIN` days (365 by default, 0 for ever), and a failed write never fails the request. Personal ciphers, logins, two-factor changes and attachment uploads record no event. The continuation token is the last event's date and id, so a page boundary inside a run of equal dates neither repeats nor skips an event.
 2. Emergency access, which needs user public keys (done) and email.
 3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
 4. Duo, which needs a Duo account to test.

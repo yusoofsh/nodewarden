@@ -66,6 +66,7 @@ export interface User {
   apiKey: string | null;
   // Client-reported id of the current user key (32 lowercase hex chars); metadata only.
   userKeyId?: string | null;
+  avatarColor?: string | null;
   createdAt: string;
   updatedAt: string;
 }

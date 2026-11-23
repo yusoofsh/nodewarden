@@ -3,6 +3,7 @@ import { errorResponse, jsonResponse, unsupportedResponse } from './utils/respon
 import {
   handleGetProfile,
   handleUpdateProfile,
+  handlePutAvatar,
   handleGetKeys,
   handleSetKeys,
   handleGetRevisionDate,
@@ -45,6 +46,7 @@ import {
   handleBulkRestoreCiphers,
   handleArchiveCipher,
   handleUnarchiveCipher,
+  handlePurgeVault,
 } from './handlers/ciphers';
 import {
   handleGetOrganizationCipherDetails,
@@ -81,8 +83,9 @@ import {
   handleGetAttachment,
   handleUpdateAttachmentMetadata,
   handleDeleteAttachment,
+  handleLegacyUploadAttachment,
 } from './handlers/attachments';
-import { handleRotateUserAccountKeys } from './handlers/key-rotation';
+import { handleGetKeyRotationData, handleRotateUserAccountKeys } from './handlers/key-rotation';
 import { handleEmergencyAccessRoute } from './handlers/emergency-access';
 import {
   handleDeleteOwnAccount,
@@ -100,6 +103,7 @@ import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
   handleCreateAccountPasskeyCredential,
   handleDeleteAccountPasskeyCredential,
+  handleDeleteAllTwoFactorWebAuthn,
   handleDeleteTwoFactorWebAuthn,
   handleGetAccountPasskeyAttestationOptions,
   handleGetAccountPasskeyCredentials,
@@ -150,6 +154,9 @@ export async function handleAuthenticatedRoute(
     '/accounts/request-otp',
     '/api/accounts/verify-otp',
     '/accounts/verify-otp',
+    // Changing the email needs the token mailed to the new address.
+    '/api/accounts/email',
+    '/accounts/email',
   ]);
   if (mailBackedAccountPaths.has(path) && (method === 'POST' || method === 'PUT')) {
     return unsupportedResponse('Email delivery is not supported by this server.');
@@ -171,8 +178,12 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/accounts/profile') {
     if (method === 'GET') return handleGetProfile(request, env, userId);
-    if (method === 'PUT') return handleUpdateProfile(request, env, userId);
+    if (method === 'PUT' || method === 'POST') return handleUpdateProfile(request, env, userId);
     return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/accounts/avatar' && method === 'PUT') {
+    return handlePutAvatar(request, env, userId);
   }
 
   if ((path === '/api/accounts/password' || path === '/api/accounts/change-password') && (method === 'POST' || method === 'PUT')) {
@@ -208,7 +219,7 @@ export async function handleAuthenticatedRoute(
     return handleGetTwoFactorYubiKey(request, env, userId);
   }
 
-  if (path === '/api/two-factor/get-device-verification-settings' && method === 'POST') {
+  if (path === '/api/two-factor/get-device-verification-settings' && (method === 'GET' || method === 'POST')) {
     return handleGetDeviceVerificationSettings(request, env, userId);
   }
 
@@ -243,6 +254,10 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Method not allowed', 405);
   }
 
+  if (path === '/api/two-factor/webauthn/all' && method === 'DELETE') {
+    return handleDeleteAllTwoFactorWebAuthn(request, env, userId, currentUser);
+  }
+
   if ((path === '/api/two-factor/yubikey/config' || path === '/api/two-factor/yubi-key/config') && (method === 'PUT' || method === 'POST')) {
     return handlePutTwoFactorYubiKeyConfig(request, env, userId);
   }
@@ -264,6 +279,16 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/accounts/key-management/rotate-user-account-keys' && method === 'POST') {
     return handleRotateUserAccountKeys(request, env, userId);
+  }
+
+  if (path === '/api/accounts/key-management/key-rotation-data' && method === 'GET') {
+    return handleGetKeyRotationData(env, userId);
+  }
+
+  // Vaultwarden accepts only V2 account keys (signature key pair and security state) here,
+  // and this server stores V1 keys only, so the rotation above is the one it offers.
+  if (path === '/api/accounts/key-management/rotate-user-keys' && method === 'POST') {
+    return unsupportedResponse('Rotating V2 encryption keys is not supported by this server.');
   }
 
   if (path === '/api/accounts/security-stamp' && method === 'POST') {
@@ -370,6 +395,10 @@ export async function handleAuthenticatedRoute(
     return handleGetOrganizationCipherDetails(request, env, userId);
   }
 
+  if (path === '/api/ciphers/purge' && method === 'POST') {
+    return handlePurgeVault(request, env, userId);
+  }
+
   if (path === '/api/ciphers/import' && method === 'POST') {
     return handleCiphersImport(request, env, userId);
   }
@@ -431,7 +460,17 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
-    if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
+    if ((subPath === '/attachment' || subPath === '/attachment-admin') && method === 'POST') {
+      const multipart = (request.headers.get('content-type') || '').includes('multipart/form-data');
+      return multipart
+        ? handleLegacyUploadAttachment(request, env, userId, cipherId)
+        : handleCreateAttachment(request, env, userId, cipherId);
+    }
+
+    const attachmentShareMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/share$/i);
+    if (attachmentShareMatch && method === 'POST') {
+      return handleLegacyUploadAttachment(request, env, userId, cipherId, attachmentShareMatch[1]);
+    }
 
     const attachmentAdminMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/(admin|delete-admin)$/i);
     if (attachmentAdminMatch) {
@@ -474,8 +513,13 @@ export async function handleAuthenticatedRoute(
   if (folderMatch) {
     const folderId = folderMatch[1];
     if (method === 'GET') return handleGetFolder(request, env, userId, folderId);
-    if (method === 'PUT') return handleUpdateFolder(request, env, userId, folderId);
+    if (method === 'PUT' || method === 'POST') return handleUpdateFolder(request, env, userId, folderId);
     if (method === 'DELETE') return handleDeleteFolder(request, env, userId, folderId);
+  }
+
+  const folderDeleteMatch = path.match(/^\/api\/folders\/([a-f0-9-]+)\/delete$/i);
+  if (folderDeleteMatch && method === 'POST') {
+    return handleDeleteFolder(request, env, userId, folderDeleteMatch[1]);
   }
 
   if (path === '/api/auth-requests' || path === '/api/auth-requests/' || path === '/auth-requests' || path === '/auth-requests/') {

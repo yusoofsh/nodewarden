@@ -529,6 +529,39 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
   return jsonResponse(twoFactorWebAuthnResponse(await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor')));
 }
 
+// DELETE /api/two-factor/webauthn/all
+// Removes every WebAuthn two-step key, like disabling the provider. Verified with the
+// master password like the single-key delete, not Vaultwarden's user verification token.
+export async function handleDeleteAllTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!body) return errorResponse('Invalid request payload', 400);
+  if (!(await verifyUserSecret(env, user, body))) {
+    return errorResponse('User verification failed.', 400);
+  }
+
+  const storage = new StorageService(env.DB);
+  const credentials = await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
+  if (!credentials.length) return errorResponse('Webauthn data not found!', 400);
+  for (const credential of credentials) {
+    await storage.deleteAccountPasskeyCredential(userId, credential.id, 'twoFactor');
+  }
+  await storage.deleteRefreshTokensByUserId(userId);
+  AuthService.invalidateUserCache(userId);
+
+  await safeWriteAuditEvent(env, {
+    actorUserId: userId,
+    action: 'account.webauthn_2fa.disable',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: userId,
+    metadata: auditRequestMetadata(request),
+  });
+
+  // Vaultwarden nests the state under webAuthn; the flat fields match the single-key delete.
+  return jsonResponse({ ...twoFactorWebAuthnResponse([]), webAuthn: { enabled: false, keys: [] } });
+}
+
 export async function handleGetAccountPasskeyAttestationOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);

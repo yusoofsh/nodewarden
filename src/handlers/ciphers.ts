@@ -35,11 +35,13 @@ import {
   FULL_ACCESS,
   deleteOrgCiphers,
   listOrganizationsOfCiphers,
+  listOrgCipherIds,
   listOrgCiphersForUser,
   listWritableOrgCipherIds,
   setOrgCiphersDeletedAt,
 } from '../services/storage-org-cipher-repo';
-import { canWriteCipher } from '../services/org-access';
+import { canWriteCipher, getConfirmedMembership, isOwner } from '../services/org-access';
+import { AuthService } from '../services/auth';
 import { touchOrganizationVault } from './organizations';
 import { createOrgCipher, readCollectionIds } from './org-ciphers';
 
@@ -1644,4 +1646,48 @@ export async function handleBulkPermanentDeleteCiphers(request: Request, env: En
   }
 
   return new Response(null, { status: 204 });
+}
+
+// POST /api/ciphers/purge, or ?organizationId= for an organization vault.
+// Personal: deletes every item the caller owns, trash included, and every folder.
+// Organization: an owner deletes every item of the organization. Either needs the master password.
+export async function handlePurgeVault(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: { masterPasswordHash?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const hash = typeof body?.masterPasswordHash === 'string' ? body.masterPasswordHash : '';
+  if (!hash) return errorResponse('masterPasswordHash is required', 400);
+  if (!(await new AuthService(env).verifyPassword(hash, user.masterPasswordHash, user.email))) {
+    return errorResponse('Invalid password', 400);
+  }
+
+  const organizationId = new URL(request.url).searchParams.get('organizationId');
+  if (organizationId !== null) {
+    const member = await getConfirmedMembership(env.DB, organizationId, userId);
+    if (!member) return errorResponse('Organization not found', 404);
+    if (!isOwner(member)) return errorResponse("You don't have permission to purge the organization vault", 400);
+    const ids = await listOrgCipherIds(env.DB, organizationId);
+    await deleteAllAttachmentsForCiphers(env, ids);
+    await deleteOrgCiphers(env.DB, ids);
+    await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+    await logEvents(env, eventActor(request, userId), [{ type: EventType.OrganizationPurgedVault, organizationId }]);
+    return new Response(null, { status: 200 });
+  }
+
+  const ids = (await storage.getAllCiphers(userId)).map((cipher) => cipher.id);
+  const folderIds = (await storage.getAllFolders(userId)).map((folder) => folder.id);
+  await deleteAllAttachmentsForCiphers(env, ids);
+  await storage.bulkDeleteCiphers(ids, userId);
+  await storage.bulkDeleteFolders(folderIds, userId);
+  const revisionDate = await storage.updateRevisionDate(userId);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  await writeCipherAudit(storage, request, userId, 'cipher.delete.purge', { count: ids.length, folders: folderIds.length });
+  return new Response(null, { status: 200 });
 }

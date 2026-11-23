@@ -32,6 +32,7 @@
     "test:notifications-security": "tsx --test scripts/notifications-security.test.ts",
     "test:emergency-access": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/emergency-access.test.ts",
     "test:events": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/events.test.ts",
+    "test:accounts-misc": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/accounts-misc.test.ts",
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",

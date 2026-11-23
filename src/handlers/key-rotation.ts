@@ -6,7 +6,8 @@ import { listKeyedGrantorEmergencyAccess } from '../services/storage-emergency-a
 import { listAccountRecoveryMemberships } from '../services/storage-organization-repo';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomingAttachmentMetadata } from './ciphers';
-import { errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse } from '../utils/response';
+import { listMembershipsByUser, MemberStatus } from '../services/storage-organization-repo';
 import { generateUUID } from '../utils/uuid';
 
 type Json = Record<string, unknown>;
@@ -271,4 +272,47 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     metadata: { ciphers: ciphers.length, folders: folders.length, sends: sends.length, ...auditRequestMetadata(request) },
   });
   return new Response(null, { status: 200 });
+}
+
+// GET /api/accounts/key-management/key-rotation-data
+// The keys a rotation re-wraps the new user key for, shaped like Vaultwarden. Emergency access
+// lists exactly the rows the rotation above requires. Passkey and device lists stay empty:
+// the rotation clears any row the client leaves out.
+export async function handleGetKeyRotationData(env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const [memberships, emergencyAccess] = await Promise.all([
+    listMembershipsByUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed]),
+    listKeyedGrantorEmergencyAccess(env.DB, userId),
+  ]);
+
+  const organizationPasswordResetKeyData = memberships
+    .filter(({ member, organization }) => member.resetPasswordKey && organization.publicKey)
+    .map(({ organization }) => ({
+      organizationId: organization.id,
+      organizationName: organization.name,
+      organizationPublicKey: organization.publicKey,
+      object: 'organizationPasswordResetKeyData',
+    }));
+
+  const emergencyAccessKeyData = [];
+  for (const access of emergencyAccess) {
+    const grantee = access.granteeId ? await storage.getUserById(access.granteeId) : null;
+    if (!grantee?.publicKey) continue;
+    emergencyAccessKeyData.push({
+      id: access.id,
+      granteeId: grantee.id,
+      granteeName: grantee.name,
+      granteeEmail: grantee.email,
+      publicKey: grantee.publicKey,
+      object: 'emergencyAccessKeyData',
+    });
+  }
+
+  return jsonResponse({
+    organizationPasswordResetKeyData,
+    emergencyAccessKeyData,
+    trustedDeviceKeyData: [],
+    passkeyKeyData: [],
+    object: 'keyRotationData',
+  });
 }
