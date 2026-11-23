@@ -23,7 +23,7 @@ its own `/api/admin/*` and web vault.
 |---|---|---|---|---|
 | core/accounts.rs | 32 | 0 | 5 | 6 |
 | core/ciphers.rs | 32 | 0 | 0 | 27 |
-| core/emergency_access.rs | 0 | 0 | 0 | 19 |
+| core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 0 | 0 | 0 | 4 |
 | core/folders.rs | 5 | 0 | 0 | 2 |
 | core/mod.rs | 8 | 0 | 0 | 1 |
@@ -39,7 +39,7 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 131, stub 0, refused 15, unmatched 114
+Total 260: handled 150, stub 0, refused 15, unmatched 95
 
 ## Not in the Vaultwarden route list
 
@@ -97,30 +97,6 @@ Total 260: handled 131, stub 0, refused 15, unmatched 114
 - `PUT /api/ciphers/delete-admin`
 - `PUT /api/ciphers/restore-admin`
 - `PUT /api/ciphers/share`
-
-</details>
-
-<details><summary>core/emergency_access.rs: unmatched (19)</summary>
-
-- `DELETE /api/emergency-access/<emer_id>`
-- `GET /api/emergency-access/<emer_id>`
-- `GET /api/emergency-access/<emer_id>/<cipher_id>/attachment/<attachment_id>`
-- `GET /api/emergency-access/<emer_id>/policies`
-- `GET /api/emergency-access/granted`
-- `GET /api/emergency-access/trusted`
-- `POST /api/emergency-access/<emer_id>`
-- `POST /api/emergency-access/<emer_id>/accept`
-- `POST /api/emergency-access/<emer_id>/approve`
-- `POST /api/emergency-access/<emer_id>/confirm`
-- `POST /api/emergency-access/<emer_id>/delete`
-- `POST /api/emergency-access/<emer_id>/initiate`
-- `POST /api/emergency-access/<emer_id>/password`
-- `POST /api/emergency-access/<emer_id>/reinvite`
-- `POST /api/emergency-access/<emer_id>/reject`
-- `POST /api/emergency-access/<emer_id>/takeover`
-- `POST /api/emergency-access/<emer_id>/view`
-- `POST /api/emergency-access/invite`
-- `PUT /api/emergency-access/<emer_id>`
 
 </details>
 
