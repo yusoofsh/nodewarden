@@ -378,7 +378,6 @@ const ORG_TABLES = {
   group_members: 'SELECT * FROM group_members ORDER BY group_id, member_id',
   collection_groups: 'SELECT * FROM collection_groups ORDER BY collection_id, group_id',
   organization_policies: 'SELECT * FROM organization_policies ORDER BY id',
-  events: 'SELECT * FROM events ORDER BY id',
 };
 
 test('backup export and restore round-trip organizations', async () => {

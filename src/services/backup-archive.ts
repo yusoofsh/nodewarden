@@ -672,7 +672,8 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, organization_id, type, enabled, data, updated_at FROM organization_policies ORDER BY organization_id ASC, type ASC'),
     queryRows(env.DB, 'SELECT collection_id, cipher_id FROM collection_ciphers ORDER BY collection_id ASC, cipher_id ASC'),
     queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
-    queryRows(env.DB, `SELECT ${EVENT_COLUMNS.join(', ')} FROM events ORDER BY event_date ASC, id ASC`),
+    // Events are a bounded log, like audit_logs: left out of exports so a busy organization cannot produce an archive over the restore size limit.
+    Promise.resolve([] as SqlRow[]),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];

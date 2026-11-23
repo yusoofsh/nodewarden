@@ -321,7 +321,7 @@ test('retention deletes events older than EVENTS_DAYS_RETAIN, 365 days by defaul
   assert.deepEqual(await ids(), ['new']);
 });
 
-test('backup export and restore carry events, and archives without them still restore', async () => {
+test('backup export leaves events out, and an archive that carries events still restores them', async () => {
   const c = await setup();
   await createInTeam(c);
   const { bytes } = await buildBackupArchive(c.env, new Date('2026-11-23T00:00:00.000Z'), { includeAttachments: false });
@@ -332,17 +332,19 @@ test('backup export and restore carry events, and archives without them still re
     return db;
   };
   const sql = 'SELECT * FROM events ORDER BY id';
-  const restored = await restore(bytes);
-  assert.ok((await rows(c.db, sql)).length > 0);
-  assert.deepEqual(await rows(restored, sql), await rows(c.db, sql));
+  const live = await rows(c.db, sql);
+  assert.ok(live.length > 0);
 
   const files = unzipSync(bytes);
   const dbJson = JSON.parse(new TextDecoder().decode(files['db.json']));
-  delete dbJson.events;
+  assert.deepEqual(dbJson.events, []);
+  const exported = await restore(bytes);
+  assert.equal((await rows(exported, 'SELECT COUNT(*) AS n FROM events'))[0].n, 0);
+  assert.equal((await rows(exported, 'SELECT COUNT(*) AS n FROM organizations'))[0].n, 2);
+
+  dbJson.events = live;
   files['db.json'] = new TextEncoder().encode(JSON.stringify(dbJson));
-  const old = await restore(zipSync(files));
-  assert.equal((await rows(old, 'SELECT COUNT(*) AS n FROM events'))[0].n, 0);
-  assert.equal((await rows(old, 'SELECT COUNT(*) AS n FROM organizations'))[0].n, 2);
+  assert.deepEqual(await rows(await restore(zipSync(files)), sql), live);
 });
 
 test('upgrading a 2026-11-23-org-ciphers database adds the events table and records into it', async () => {
