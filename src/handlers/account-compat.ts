@@ -3,7 +3,7 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { isLastActiveAdmin, purgeUser } from '../services/user-deletion';
+import { isLastActiveAdmin, LAST_ORGANIZATION_OWNER_ERROR, purgeUser } from '../services/user-deletion';
 import { generateUUID } from '../utils/uuid';
 
 const HIBP_USERNAME_PATTERN = /^[^\s/?#]{1,254}$/;
@@ -102,7 +102,7 @@ export async function handleDeleteOwnAccount(request: Request, env: Env, userId:
     return errorResponse('The last active admin cannot delete their own account', 400);
   }
 
-  await purgeUser(env, storage, user);
+  if (!(await purgeUser(env, storage, user))) return errorResponse(LAST_ORGANIZATION_OWNER_ERROR, 400);
   await safeWriteAuditEvent(env, {
     actorUserId: null,
     action: 'account.delete',

@@ -2,7 +2,7 @@ import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { purgeUser } from '../services/user-deletion';
+import { LAST_ORGANIZATION_OWNER_ERROR, purgeUser } from '../services/user-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 
 function isAdmin(user: User): boolean {
@@ -413,7 +413,7 @@ export async function handleAdminDeleteUser(
     return errorResponse('User not found', 404);
   }
 
-  await purgeUser(env, storage, target);
+  if (!(await purgeUser(env, storage, target))) return errorResponse(LAST_ORGANIZATION_OWNER_ERROR, 400);
   await writeAuditLog(storage, actorUser.id, 'admin.user.delete', 'user', target.id, {
     targetEmail: target.email,
   }, request);

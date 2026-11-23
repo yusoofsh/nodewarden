@@ -2,11 +2,17 @@ import type { Env, User } from '../types';
 import { AuthService } from './auth';
 import { StorageService } from './storage';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
+import { listOrganizationsSolelyOwnedBy } from './storage-organization-repo';
+
+export const LAST_ORGANIZATION_OWNER_ERROR = 'The last owner of an organization cannot be deleted';
 
 // Removes a user's stored files first, then the user row. D1 cascades delete the
-// remaining rows. Files go first so a failure never leaves orphaned blobs without
-// a row that points at them.
-export async function purgeUser(env: Env, storage: StorageService, target: User): Promise<void> {
+// remaining rows, organization memberships included. Files go first so a failure never
+// leaves orphaned blobs without a row that points at them.
+// Returns false, and deletes nothing, when the user is the last owner of an organization.
+export async function purgeUser(env: Env, storage: StorageService, target: User): Promise<boolean> {
+  if ((await listOrganizationsSolelyOwnedBy(env.DB, target.id)).length > 0) return false;
+
   const attachmentMap = await storage.getAttachmentsByUserId(target.id);
   for (const [cipherId, attachments] of attachmentMap) {
     for (const att of attachments) {
@@ -29,6 +35,7 @@ export async function purgeUser(env: Env, storage: StorageService, target: User)
   await storage.deleteRefreshTokensByUserId(target.id);
   await storage.deleteUserById(target.id);
   AuthService.invalidateUserCache(target.id);
+  return true;
 }
 
 // True when deleting this user would leave the instance with no active admin.

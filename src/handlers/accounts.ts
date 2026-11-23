@@ -11,6 +11,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
+import { listProfileMemberships } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -495,7 +496,8 @@ export async function handleGetProfile(request: Request, env: Env, userId: strin
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
   const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey }));
+  const memberships = await listProfileMemberships(env.DB, user.id);
+  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey, memberships }));
 }
 
 // PUT /api/accounts/profile
@@ -535,7 +537,8 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
   });
 
   const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey }));
+  const memberships = await listProfileMemberships(env.DB, user.id);
+  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey, memberships }));
 }
 
 // PUT/POST /api/accounts/verify-devices

@@ -51,8 +51,8 @@ function readRoutes(): Route[] {
 
 type Verdict = 'handled' | 'stub' | 'refused' | 'unmatched';
 
-// Catch-alls in router-authenticated.ts that answer every GET with an empty list.
-const STUB_PREFIX = /^\/api\/(organizations|collections|policies)(\/|$)/;
+// The catch-all in router-authenticated.ts that answers every GET with an empty list.
+const STUB_PREFIX = /^\/api\/policies(\/|$)/;
 
 async function main() {
   const db = createTestDb();

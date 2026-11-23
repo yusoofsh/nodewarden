@@ -133,11 +133,52 @@ check('token is rejected after the stamp changes', (await call('GET', '/api/sync
 // Self-delete a second account.
 // The first account is the admin and later accounts need an invite code.
 session = await login(email, 'hash-3');
+token = session.json?.access_token;
+
+// Organizations: create, rename, collections, sync, leave and delete.
+const org = await call('POST', '/api/organizations', {
+  token,
+  body: { name: 'Smoke org', billingEmail: email, collectionName: enc('default'), key: '4.b3JnLWtleQ==', planType: 0, keys: { encryptedPrivateKey: enc('orgpriv'), publicKey: 'b3JnLXB1Yg==' } },
+});
+check('create organization', org.status === 200 && org.json?.object === 'organization', `${org.status} ${org.text}`);
+const orgPath = `/api/organizations/${org.json?.id}`;
+const renamed = await call('PUT', orgPath, { token, body: { name: 'Smoke org 2', billingEmail: email } });
+check('rename organization', renamed.status === 200 && renamed.json?.name === 'Smoke org 2', `${renamed.status} ${renamed.text}`);
+const orgKey = await call('GET', `${orgPath}/public-key`, { token });
+check('organization public key', orgKey.json?.publicKey === 'b3JnLXB1Yg==', orgKey.text);
+const members = await call('GET', `${orgPath}/users`, { token });
+check('member list has the owner', members.json?.data?.length === 1 && members.json.data[0].type === 0 && members.json.data[0].status === 2, members.text);
+const coll = await call('POST', `${orgPath}/collections`, { token, body: { name: enc('team'), users: [], groups: [] } });
+check('create collection', coll.status === 200 && coll.json?.object === 'collectionDetails', `${coll.status} ${coll.text}`);
+const collUpdate = await call('PUT', `${orgPath}/collections/${coll.json?.id}`, { token, body: { name: enc('team2'), users: [], groups: [] } });
+check('update collection', collUpdate.status === 200 && collUpdate.json?.name === enc('team2'), `${collUpdate.status} ${collUpdate.text}`);
+const details = await call('GET', `${orgPath}/collections/details`, { token });
+check('collection details', details.json?.data?.length === 2 && details.json.data.every((c) => c.object === 'collectionAccessDetails'), details.text.slice(0, 300));
+const mine = await call('GET', '/api/collections', { token });
+check('GET /api/collections', mine.json?.data?.length === 2, mine.text.slice(0, 300));
+sync = await call('GET', '/api/sync', { token });
+check('sync lists the organization and its collections', sync.json?.profile?.organizations?.[0]?.id === org.json?.id && sync.json?.collections?.length === 2, sync.text.slice(0, 300));
+check('the last owner cannot leave', (await call('POST', `${orgPath}/leave`, { token })).status === 400);
+check('delete collection', (await call('DELETE', `${orgPath}/collections/${coll.json?.id}`, { token })).status === 200);
+check('delete organization needs the password', (await call('DELETE', orgPath, { token, body: { masterPasswordHash: 'wrong' } })).status === 400);
+check('delete organization', (await call('DELETE', orgPath, { token, body: { masterPasswordHash: 'hash-3' } })).status === 200);
+sync = await call('GET', '/api/sync', { token });
+check('sync no longer lists it', sync.json?.profile?.organizations?.length === 0 && sync.json?.collections?.length === 0, sync.text.slice(0, 300));
+check('deleted organization answers 404', (await call('GET', orgPath, { token })).status === 404);
+
 const invite = await call('POST', '/api/admin/invites', { token: session.json?.access_token, body: { masterPasswordHash: 'hash-3' } });
 check('admin creates an invite', invite.status === 201 && invite.json?.code, `${invite.status} ${invite.text}`);
 const second0 = await register(email2, 'hash-x', invite.json?.code);
 check('register second account', second0.status === 200, `${second0.status} ${second0.text}`);
 const second = await login(email2, 'hash-x');
+const secondToken = second.json?.access_token;
+const secondOrg = await call('POST', '/api/organizations', {
+  token: secondToken, body: { name: 'Second org', billingEmail: email2, collectionName: enc('default'), key: '4.b3JnLWtleQ==' },
+});
+const blocked = await call('POST', '/api/accounts/delete', { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
+check('the last owner of an organization cannot delete their account', blocked.status === 400 && /organization/.test(blocked.json?.error || ''), `${blocked.status} ${blocked.text}`);
+check('the other account cannot see that organization', (await call('GET', `/api/organizations/${secondOrg.json?.id}`, { token })).status === 404);
+await call('DELETE', `/api/organizations/${secondOrg.json?.id}`, { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
 const deleted = await call('POST', '/api/accounts/delete', { token: second.json?.access_token, body: { masterPasswordHash: 'hash-x' } });
 check('delete own account', deleted.status === 200, `${deleted.status} ${deleted.text}`);
 check('deleted account cannot log in', (await login(email2, 'hash-x')).status !== 200);

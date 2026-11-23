@@ -11,6 +11,8 @@ import {
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
+import { collectionDetailsJson } from '../utils/organization-response';
+import { listCollectionsForUser, listProfileMemberships } from '../services/storage-organization-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -81,12 +83,14 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return cachedResponse;
   }
 
-  const [ciphers, folders, sends, attachmentsByCipher, domainSettings] = await Promise.all([
+  const [ciphers, folders, sends, attachmentsByCipher, domainSettings, memberships, collections] = await Promise.all([
     storage.getAllCiphers(userId),
     storage.getAllFolders(userId),
     excludeSends ? Promise.resolve([]) : storage.getAllSends(userId),
     storage.getAttachmentsByUserId(userId),
     excludeDomains ? Promise.resolve(null) : storage.getUserDomainSettings(userId),
+    listProfileMemberships(env.DB, userId),
+    listCollectionsForUser(env.DB, userId),
   ]);
   const webAuthnPrfOptions = accountPasskeys
     .map(buildWebAuthnPrfOption)
@@ -96,6 +100,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
 
   const profile: ProfileResponse = buildProfileResponse(user, env, {
     hasTwoFactorPasskey: twoFactorPasskeys.length > 0,
+    memberships,
   });
 
   const cipherResponses: CipherResponse[] = [];
@@ -121,7 +126,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const syncResponse: SyncResponse = {
     profile,
     folders: folderResponses,
-    collections: [],
+    collections: collections.map(({ collection, member, access }) => collectionDetailsJson(collection, member, access)),
     ciphers: cipherResponses,
     domains: excludeDomains
       ? null
