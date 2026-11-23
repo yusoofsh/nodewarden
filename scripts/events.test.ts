@@ -358,7 +358,7 @@ test('upgrading a 2026-11-23-org-ciphers database adds the events table and reco
     await new StorageService(db).initializeDatabase();
   }
   assert.ok((await tables()).includes('events'));
-  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-events');
+  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-users-avatar-color');
 
   verifier ??= await createPasswordVerifier(PASSWORD);
   const env = { DB: db, JWT_SECRET: 'x'.repeat(40) } as unknown as Env;

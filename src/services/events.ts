@@ -29,6 +29,7 @@ export const EventType = {
   OrganizationUserLeft: 1516,
   OrganizationUserNotificationBannerActionClicked: 1522,
   OrganizationUpdated: 1600,
+  OrganizationPurgedVault: 1601,
   OrganizationClientExportedVault: 1602,
   PolicyUpdated: 1700,
 } as const;
