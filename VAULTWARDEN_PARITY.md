@@ -31,7 +31,7 @@ its own `/api/admin/*` and web vault.
 | core/public.rs | 0 | 0 | 0 | 1 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
-| core/two_factor/duo.rs | 0 | 0 | 0 | 4 |
+| core/two_factor/duo.rs | 4 | 0 | 0 | 0 |
 | core/two_factor/email.rs | 0 | 0 | 5 | 0 |
 | core/two_factor/mod.rs | 3 | 0 | 0 | 0 |
 | core/two_factor/protected_actions.rs | 0 | 0 | 2 | 0 |
@@ -39,11 +39,12 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 232, stub 0, refused 18, unmatched 10
+Total 260: handled 236, stub 0, refused 18, unmatched 6
 
 ## Not in the Vaultwarden route list
 
 - **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
+- **Duo login.** Two-factor provider 2 (Duo Universal Prompt) is offered at `/identity/connect/token` only to users who saved Duo settings. Duo redirects back to `/duo-redirect-connector.html`, which hands the code and state to the client. This repo's `webapp/` has no Duo settings or login screen; official clients drive it.
 - **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete or hibp. They serve official clients only. Organization features need web vault screens too.
 
 ## Unhandled and refused routes
@@ -70,15 +71,6 @@ Total 260: handled 232, stub 0, refused 18, unmatched 10
 <details><summary>core/public.rs: unmatched (1)</summary>
 
 - `POST /api/public/organization/import`
-
-</details>
-
-<details><summary>core/two_factor/duo.rs: unmatched (4)</summary>
-
-- `DELETE /api/two-factor/duo`
-- `POST /api/two-factor/duo`
-- `POST /api/two-factor/get-duo`
-- `PUT /api/two-factor/duo`
 
 </details>
 

@@ -18,6 +18,16 @@ import {
   initializeYubicoCredentialsOnce,
   replaceYubicoCredentials,
 } from '../services/yubico-config';
+import {
+  DUO_SECRET_MASK,
+  TWO_FACTOR_PROVIDER_DUO,
+  duoHealthCheck,
+  hasDuoConfig,
+  maskDuoSecret,
+  parseDuoCredentials,
+  readDuoCredentials,
+  sealDuoConfig,
+} from '../services/duo';
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
@@ -1028,6 +1038,7 @@ export async function handleGetTwoFactorProviders(request: Request, env: Env, us
   if (isYubiKeyEnabled(user)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_YUBIKEY, true));
   const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
   if (webAuthnCredentials.length > 0) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_WEBAUTHN, true));
+  if (hasDuoConfig(user)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_DUO, true));
 
   return jsonResponse({
     Data: data,
@@ -1356,7 +1367,7 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
 }
 
 // DELETE /api/two-factor/authenticator and PUT/POST /api/two-factor/disable
-export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string, forcedType?: number): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const user = await storage.getUserById(userId);
@@ -1369,17 +1380,20 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     return errorResponse('Invalid JSON', 400);
   }
 
-  const typeRaw = body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
+  const typeRaw = forcedType ?? body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
   const type = typeof typeRaw === 'number' ? typeRaw : Number.parseInt(String(typeRaw), 10);
-  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
+  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_DUO, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
-  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const verified = type === TWO_FACTOR_PROVIDER_DUO
+    ? await verifyDuoUser(env, auth, user, body)
+    : await verifyUserSecret(auth, user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']));
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
+  if (type === TWO_FACTOR_PROVIDER_DUO) {
+    user.duoConfig = null;
+  } else if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
     user.totpSecret = null;
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
     user.yubikeyKey1 = null;
@@ -1404,7 +1418,9 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
       ? 'account.totp.disable'
       : type === TWO_FACTOR_PROVIDER_YUBIKEY
         ? 'account.yubikey.disable'
-        : 'account.webauthn_2fa.disable',
+        : type === TWO_FACTOR_PROVIDER_DUO
+          ? 'account.duo.disable'
+          : 'account.webauthn_2fa.disable',
     category: 'security',
     level: 'security',
     targetType: 'user',
@@ -1413,6 +1429,105 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   });
 
   return jsonResponse(twoFactorProviderResponse(type, false));
+}
+
+const DUO_VERIFICATION_KEY = 'duo';
+
+// get-duo hands out a userVerificationToken as Vaultwarden does; official clients send the
+// master password hash or OTP instead. Either one verifies the user.
+async function verifyDuoUser(env: Env, auth: AuthService, user: User, body: Record<string, unknown>): Promise<boolean> {
+  const token = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
+  if (token) return verifyTotpUserVerificationToken(env, user, DUO_VERIFICATION_KEY, token);
+  return verifyUserSecret(auth, user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']));
+}
+
+async function duoSettingsResponse(env: Env, user: User, userVerificationToken?: string): Promise<Record<string, unknown>> {
+  const credentials = await readDuoCredentials(env, user);
+  const settings = {
+    enabled: hasDuoConfig(user),
+    host: credentials?.host ?? null,
+    clientId: credentials?.clientId ?? null,
+    clientSecret: credentials ? maskDuoSecret(credentials.clientSecret) : null,
+  };
+  // Bitwarden clients read the flat fields; Vaultwarden's duo.rs nests them under "duo".
+  return { ...settings, duo: settings, userVerificationToken: userVerificationToken ?? null, object: 'twoFactorDuo' };
+}
+
+// POST /api/two-factor/get-duo
+export async function handleGetTwoFactorDuo(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
+  if (!await verifyUserSecret(new AuthService(env), user, secret)) return errorResponse('User verification failed.', 400);
+
+  const token = await createTotpUserVerificationToken(env, user, DUO_VERIFICATION_KEY);
+  return jsonResponse(await duoSettingsResponse(env, user, token));
+}
+
+// PUT/POST /api/two-factor/duo
+export async function handlePutTwoFactorDuo(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  if (!await verifyDuoUser(env, new AuthService(env), user, body)) return errorResponse('User verification failed.', 400);
+
+  let clientSecret = readBodyString(body, ['clientSecret', 'ClientSecret', 'secretKey', 'SecretKey']).trim();
+  if (clientSecret.includes(DUO_SECRET_MASK)) {
+    // The settings form sends back the masked secret when only the host or client ID changed.
+    const existing = await readDuoCredentials(env, user);
+    if (!existing || clientSecret !== maskDuoSecret(existing.clientSecret)) {
+      return errorResponse('Enter the Duo client secret again.', 400);
+    }
+    clientSecret = existing.clientSecret;
+  }
+  const credentials = parseDuoCredentials(
+    readBodyString(body, ['host', 'Host']),
+    readBodyString(body, ['clientId', 'ClientId', 'integrationKey', 'IntegrationKey']),
+    clientSecret
+  );
+  if (!credentials) {
+    return errorResponse('Invalid Duo settings. The API hostname must be api-XXXXXXXX.duosecurity.com, the client ID 20 characters and the client secret 40 characters.', 400);
+  }
+  try {
+    await duoHealthCheck(credentials);
+  } catch {
+    return errorResponse('Failed to validate Duo credentials.', 400);
+  }
+
+  user.duoConfig = await sealDuoConfig(env, user.id, credentials);
+  if (!user.totpRecoveryCode) {
+    user.totpRecoveryCode = createRecoveryCode();
+  }
+  user.updatedAt = new Date().toISOString();
+  await storage.saveUser(user);
+  await storage.deleteRefreshTokensByUserId(user.id);
+  AuthService.invalidateUserCache(user.id);
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: 'account.duo.enable',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: auditRequestMetadata(request),
+  });
+
+  return jsonResponse(await duoSettingsResponse(env, user));
 }
 
 // PUT /api/accounts/totp
@@ -1612,6 +1727,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   user.yubikeyKey4 = null;
   user.yubikeyKey5 = null;
   user.yubikeyNfc = false;
+  user.duoConfig = null;
   const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
   for (const credential of webAuthnCredentials) {
     await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');

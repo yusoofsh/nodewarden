@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
   api_key TEXT,
   user_key_id TEXT,
   avatar_color TEXT,
+  duo_config TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
