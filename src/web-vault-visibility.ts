@@ -16,6 +16,7 @@ const BACKEND_PATH_PREFIXES = [
 const BACKEND_EXACT_PATHS = new Set([
   '/v1/assetlinks:check',
   '/web-bootstrap',
+  '/alive',
   '/config',
   '/accounts/kdf',
   '/settings/domains',
