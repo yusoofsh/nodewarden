@@ -11,8 +11,6 @@ export const EventType = {
   CipherCreated: 1100,
   CipherUpdated: 1101,
   CipherDeleted: 1102,
-  CipherAttachmentCreated: 1103,
-  CipherAttachmentDeleted: 1104,
   CipherShared: 1105,
   CipherUpdatedCollections: 1106,
   CipherSoftDeleted: 1115,

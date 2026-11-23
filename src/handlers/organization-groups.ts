@@ -89,11 +89,11 @@ async function writeGroup(env: Env, group: Group, request: Request, isNew: boole
   const saved = { ...group, name: parsed.name, externalId: isNew ? parsed.externalId : group.externalId };
   await saveGroup(env.DB, saved, parsed.access.map((a) => ({ ...a, groupId: group.id })), parsed.memberIds, isNew);
   await touchOrganization(env.DB, group.organizationId);
-  await logEvents(env, actor, [{
-    type: isNew ? EventType.GroupCreated : EventType.GroupUpdated,
-    organizationId: group.organizationId,
-    groupId: group.id,
-  }]);
+  // As in Vaultwarden, each member the request names gets an event too.
+  await logEvents(env, actor, [
+    { type: isNew ? EventType.GroupCreated : EventType.GroupUpdated, organizationId: group.organizationId, groupId: group.id },
+    ...parsed.memberIds.map((memberId) => ({ type: EventType.OrganizationUserUpdatedGroups, organizationId: group.organizationId, memberId })),
+  ]);
   return jsonResponse(groupJson(saved));
 }
 

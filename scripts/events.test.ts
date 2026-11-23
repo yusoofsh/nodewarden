@@ -110,7 +110,7 @@ test('organization, member, collection, group and policy changes are recorded wi
   const collection = (await call(c.env, 'owner', 'POST', `${base}/collections`, { name: enc('c') })).json.id;
   assert.equal((await call(c.env, 'owner', 'PUT', `${base}/collections/${collection}`, { name: enc('c2') })).status, 200);
   assert.equal((await call(c.env, 'owner', 'DELETE', `${base}/collections/${collection}`)).status, 200);
-  const group = (await call(c.env, 'owner', 'POST', `${base}/groups`, { name: 'g' })).json.id;
+  const group = (await call(c.env, 'owner', 'POST', `${base}/groups`, { name: 'g', users: [c.userMember] })).json.id;
   assert.equal((await call(c.env, 'owner', 'PUT', `${base}/groups/${group}`, { name: 'g2' })).status, 200);
   assert.equal((await call(c.env, 'owner', 'PUT', `${base}/users/${c.userMember}/groups`, { groupIds: [group] })).status, 200);
   assert.equal((await call(c.env, 'owner', 'DELETE', `${base}/groups/${group}`)).status, 200);
@@ -123,7 +123,7 @@ test('organization, member, collection, group and policy changes are recorded wi
   assert.equal((await call(c.env, 'outsider', 'POST', `${base}/leave`)).status, 200);
   assert.equal((await call(c.env, 'owner', 'DELETE', `${base}/users/${c.adminMember}`)).status, 200);
 
-  assert.deepEqual(await types(c), [1600, 1300, 1301, 1302, 1400, 1401, 1504, 1402, 1502, 1700, 1500, 1501, 1516, 1503]);
+  assert.deepEqual(await types(c), [1600, 1300, 1301, 1302, 1400, 1504, 1401, 1504, 1402, 1502, 1700, 1500, 1501, 1516, 1503]);
   const res = await orgEvents(c);
   assert.equal(res.status, 200);
   assert.equal(res.json.object, 'list');
