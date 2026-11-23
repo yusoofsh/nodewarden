@@ -18,6 +18,28 @@ export interface AppConfirmState {
   onCancel?: () => void;
 }
 
+export type SetConfirm = (state: AppConfirmState | null) => void;
+
+/** Asks with the app's confirm dialog, then runs `action` with the master password when one was asked for. */
+export function confirmThen(
+  setConfirm: SetConfirm,
+  title: string,
+  message: string,
+  action: (masterPassword?: string) => void,
+  requireMasterPassword = false
+): void {
+  setConfirm({
+    title,
+    message,
+    danger: true,
+    requireMasterPassword,
+    onConfirm: (masterPassword) => {
+      setConfirm(null);
+      action(masterPassword);
+    },
+  });
+}
+
 interface AppGlobalOverlaysProps {
   toasts: ToastMessage[];
   onCloseToast: (id: string) => void;
