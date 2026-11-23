@@ -190,10 +190,10 @@ const INSERT_CIPHER =
   'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at, organization_id) ' +
   'VALUES(?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?, ?, NULL, NULL, ?)';
 
-/** Inserts a new organization cipher and its collection links in one transaction. */
-export async function insertOrgCipher(db: D1Database, cipher: Cipher, collectionIds: string[]): Promise<void> {
+/** The statements that insert a new organization cipher and its collection links. */
+export function insertOrgCipherStatements(db: D1Database, cipher: Cipher, collectionIds: string[]): D1PreparedStatement[] {
   const organizationId = cipher.organizationId!;
-  await db.batch([
+  return [
     db
       .prepare(INSERT_CIPHER)
       .bind(
@@ -201,7 +201,12 @@ export async function insertOrgCipher(db: D1Database, cipher: Cipher, collection
         cipher.reprompt ?? 0, cipher.key ?? null, cipher.createdAt, cipher.updatedAt, organizationId
       ),
     ...linkStatements(db, cipher.id, organizationId, collectionIds),
-  ]);
+  ];
+}
+
+/** Inserts a new organization cipher and its collection links in one transaction. */
+export async function insertOrgCipher(db: D1Database, cipher: Cipher, collectionIds: string[]): Promise<void> {
+  await db.batch(insertOrgCipherStatements(db, cipher, collectionIds));
 }
 
 /**
@@ -232,6 +237,15 @@ export async function shareCipher(
   return Number(moved.meta?.changes || 0) === 1;
 }
 
+function collectionChangeStatements(db: D1Database, cipherId: string, organizationId: string, add: string[], remove: string[]) {
+  return [
+    ...linkStatements(db, cipherId, organizationId, add),
+    ...remove.map((collectionId) =>
+      db.prepare('DELETE FROM collection_ciphers WHERE cipher_id = ? AND collection_id = ?').bind(cipherId, collectionId)
+    ),
+  ];
+}
+
 /** Adds and removes collection links of an organization cipher, in one transaction. */
 export async function updateCipherCollections(
   db: D1Database,
@@ -240,12 +254,21 @@ export async function updateCipherCollections(
   add: string[],
   remove: string[]
 ): Promise<void> {
-  const statements = [
-    ...linkStatements(db, cipherId, organizationId, add),
-    ...remove.map((collectionId) =>
-      db.prepare('DELETE FROM collection_ciphers WHERE cipher_id = ? AND collection_id = ?').bind(cipherId, collectionId)
-    ),
-  ];
+  const statements = collectionChangeStatements(db, cipherId, organizationId, add, remove);
+  if (statements.length) await db.batch(statements);
+}
+
+/** Adds or removes the same collection links on several organization ciphers, in one transaction. */
+export async function updateCiphersCollections(
+  db: D1Database,
+  cipherIds: string[],
+  organizationId: string,
+  collectionIds: string[],
+  remove: boolean
+): Promise<void> {
+  const statements = cipherIds.flatMap((id) =>
+    collectionChangeStatements(db, id, organizationId, remove ? [] : collectionIds, remove ? collectionIds : [])
+  );
   if (statements.length) await db.batch(statements);
 }
 

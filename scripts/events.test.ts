@@ -4,7 +4,7 @@ import test from 'node:test';
 import { unzipSync, zipSync } from 'fflate';
 
 import type { Env, User } from '../src/types';
-import { StorageService } from '../src/services/storage';
+import { STORAGE_SCHEMA_VERSION, StorageService } from '../src/services/storage';
 import { ensureStorageSchema } from '../src/services/storage-schema';
 import { createPasswordVerifier } from '../src/services/password-verifier';
 import { handleAuthenticatedRoute } from '../src/router-authenticated';
@@ -358,7 +358,7 @@ test('upgrading a 2026-11-23-org-ciphers database adds the events table and reco
     await new StorageService(db).initializeDatabase();
   }
   assert.ok((await tables()).includes('events'));
-  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-events');
+  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, STORAGE_SCHEMA_VERSION);
 
   verifier ??= await createPasswordVerifier(PASSWORD);
   const env = { DB: db, JWT_SECRET: 'x'.repeat(40) } as unknown as Env;

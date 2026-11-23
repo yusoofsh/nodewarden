@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import type { Env, User } from '../src/types';
-import { StorageService } from '../src/services/storage';
+import { STORAGE_SCHEMA_VERSION, StorageService } from '../src/services/storage';
 import { ensureStorageSchema } from '../src/services/storage-schema';
 import { createPasswordVerifier } from '../src/services/password-verifier';
 import { handleAuthenticatedRoute } from '../src/router-authenticated';
@@ -452,7 +452,7 @@ test(`upgrading a ${version} database keeps personal ciphers and adopts earlier 
     await new StorageService(db).initializeDatabase();
   }
   assert.ok((await columns()).includes('organization_id'));
-  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, '2026-11-23-events');
+  assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, STORAGE_SCHEMA_VERSION);
   assert.deepEqual(
     (await rows(db, 'SELECT id, organization_id FROM ciphers ORDER BY id')).map((r) => [r.id, r.organization_id]),
     [['c-adopted', org], ['c-corrupt', null], ['c-not-member', null], ['c-personal', null]]

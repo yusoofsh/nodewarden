@@ -168,7 +168,11 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope ON webauthn_challenges(user_id, scope)',
 
   'CREATE TABLE IF NOT EXISTS organizations (' +
-  'id TEXT PRIMARY KEY, name TEXT NOT NULL, billing_email TEXT NOT NULL, private_key TEXT, public_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  'id TEXT PRIMARY KEY, name TEXT NOT NULL, billing_email TEXT NOT NULL, private_key TEXT, public_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'api_key TEXT, api_key_revision_date TEXT)',
+  // The organization API key an owner views and rotates. Like users.api_key it stays out of backups.
+  'ALTER TABLE organizations ADD COLUMN api_key TEXT',
+  'ALTER TABLE organizations ADD COLUMN api_key_revision_date TEXT',
 
   'CREATE TABLE IF NOT EXISTS organization_members (' +
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, akey TEXT NOT NULL DEFAULT \'\', status INTEGER NOT NULL, type INTEGER NOT NULL, ' +

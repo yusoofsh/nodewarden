@@ -3,6 +3,7 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { applyKeyRotation } from '../services/storage-key-rotation-repo';
 import { listKeyedGrantorEmergencyAccess } from '../services/storage-emergency-access-repo';
+import { listAccountRecoveryMemberships } from '../services/storage-organization-repo';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomingAttachmentMetadata } from './ciphers';
 import { errorResponse } from '../utils/response';
@@ -118,11 +119,12 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     devices.push({ deviceIdentifier: str(item.deviceId), encryptedUserKey, encryptedPublicKey });
   }
 
-  const [existingCiphers, existingFolders, existingSends, existingEmergencyAccess] = await Promise.all([
+  const [existingCiphers, existingFolders, existingSends, existingEmergencyAccess, existingAccountRecovery] = await Promise.all([
     storage.getAllCiphers(userId),
     storage.getAllFolders(userId),
     storage.getAllSends(userId),
     listKeyedGrantorEmergencyAccess(env.DB, userId),
+    listAccountRecoveryMemberships(env.DB, userId),
   ]);
 
   // Emergency contacts hold the user key wrapped with their public key. Every confirmed
@@ -139,6 +141,22 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     const keyEncrypted = incomingEmergencyKeys.get(access.id)!;
     if (!isWrappedKey(keyEncrypted)) return errorResponse('Emergency access keys cannot be set to null during rotation.', 400);
     emergencyAccess.push({ id: access.id, keyEncrypted });
+  }
+
+  // Each organization the user enrolled in account recovery holds the user key wrapped with its public
+  // key. It must be re-wrapped too, or a recovery would install a user key that no longer exists.
+  const incomingRecoveryKeys = new Map<string, string>();
+  for (const item of asArray(unlockRoot.organizationAccountRecoveryUnlockData)) {
+    if (isRecord(item) && str(item.organizationId)) incomingRecoveryKeys.set(str(item.organizationId).toLowerCase(), str(item.resetPasswordKey));
+  }
+  const accountRecovery: Array<{ id: string; key: string }> = [];
+  for (const membership of existingAccountRecovery) {
+    if (!incomingRecoveryKeys.has(membership.organizationId)) {
+      return errorResponse('All existing reset password keys must be included in the rotation', 400);
+    }
+    const key = incomingRecoveryKeys.get(membership.organizationId)!;
+    if (!isWrappedKey(key)) return errorResponse('Account recovery keys cannot be null or empty during rotation.', 400);
+    accountRecovery.push({ id: membership.id, key });
   }
 
   const incomingCiphers = new Map<string, Json>();
@@ -233,6 +251,7 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     folders,
     sends,
     emergencyAccess,
+    accountRecovery,
     passkeys,
     devices,
     now,

@@ -293,10 +293,12 @@ CREATE TABLE IF NOT EXISTS organizations (
   private_key TEXT,
   public_key TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  api_key TEXT,
+  api_key_revision_date TEXT
 );
 
--- status: -1 revoked, 0 invited, 1 accepted, 2 confirmed. type: 0 owner, 1 admin, 2 user, 4 custom.
+-- status: 0 invited, 1 accepted, 2 confirmed; a revoked member keeps its status minus 128 (clients see -1). type: 0 owner, 1 admin, 2 user, 4 custom.
 CREATE TABLE IF NOT EXISTS organization_members (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
