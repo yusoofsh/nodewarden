@@ -1,4 +1,5 @@
 import { errorResponse } from '../utils/response';
+import type { CipherAccess } from './storage-org-cipher-repo';
 import { countConfirmedOwners, getMember, getMemberById, MemberStatus, MemberType, type OrganizationMember } from './storage-organization-repo';
 
 export type OrgRole = 'member' | 'admin' | 'owner';
@@ -16,6 +17,17 @@ export async function getConfirmedMembership(
 export const isOwner = (member: OrganizationMember): boolean => member.type === MemberType.Owner;
 export const isAdminOrOwner = (member: OrganizationMember): boolean =>
   member.type === MemberType.Owner || member.type === MemberType.Admin;
+
+/** Reaches every cipher and collection of the organization. Keep in step with FULL_ACCESS_SQL in storage-org-cipher-repo.ts. */
+export const hasFullAccess = (member: OrganizationMember): boolean =>
+  member.status === MemberStatus.Confirmed && (member.accessAll || isAdminOrOwner(member));
+
+/** May edit, delete and restore a cipher: not read-only, or allowed to manage it. */
+export const canWriteCipher = (access: CipherAccess): boolean => !access.readOnly || access.manage;
+
+/** May change a cipher's collections; hidden passwords would otherwise let a member copy the item out. */
+export const canEditCipherCollections = (access: CipherAccess): boolean =>
+  (!access.readOnly && !access.hidePasswords) || access.manage;
 
 /**
  * The membership `memberId` when it belongs to the caller, else the response to send. Accepting an

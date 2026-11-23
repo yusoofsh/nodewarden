@@ -11,11 +11,10 @@ import {
   type Organization,
   type OrganizationMember,
 } from '../services/storage-organization-repo';
+import { hasFullAccess } from '../services/org-access';
 
 const hasKeys = (org: Organization): boolean => !!org.privateKey && !!org.publicKey;
 const isAdminType = (type: number): boolean => type === MemberType.Owner || type === MemberType.Admin;
-const hasFullAccess = (member: OrganizationMember): boolean =>
-  (member.accessAll || isAdminType(member.type)) && member.status === MemberStatus.Confirmed;
 
 const PERMISSIONS = {
   manageSso: false,

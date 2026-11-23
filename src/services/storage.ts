@@ -1,3 +1,4 @@
+import { type AccessibleCipher, FULL_ACCESS, getOrgCipherForUser } from './storage-org-cipher-repo';
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
@@ -65,13 +66,10 @@ import {
 } from './storage-cipher-repo';
 import {
   addAttachmentToCipher as attachStoredAttachmentToCipher,
-  addAttachmentToCipherForUser as attachStoredAttachmentToCipherForUser,
   bulkDeleteAttachmentsByIds as deleteStoredAttachmentsByIds,
   deleteAllAttachmentsByCipher as deleteStoredAttachmentsByCipher,
   deleteAttachment as deleteStoredAttachment,
-  deleteAttachmentForUser as deleteStoredAttachmentForUser,
   getAttachment as findStoredAttachment,
-  getAttachmentForUser as findStoredAttachmentForUser,
   getAttachmentsByCipher as listStoredAttachmentsByCipher,
   getAttachmentsByCipherIds as listStoredAttachmentsByCipherIds,
   getAttachmentsByUserId as listStoredAttachmentsByUserId,
@@ -167,8 +165,8 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-11-23-organization-groups-policies';
-const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays', 'organizations', 'organization_members', 'collections', 'collection_members', 'organization_groups', 'group_members', 'collection_groups', 'organization_policies'] as const;
+const STORAGE_SCHEMA_VERSION = '2026-11-23-org-ciphers';
+const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays', 'organizations', 'organization_members', 'collections', 'collection_members', 'organization_groups', 'group_members', 'collection_groups', 'organization_policies', 'collection_ciphers'] as const;
 
 // D1-backed storage.
 // Contract:
@@ -498,6 +496,13 @@ export class StorageService {
     return findStoredCipherForUser(this.db, id, userId);
   }
 
+  /** The user's personal cipher with full access, else an organization cipher they can see, else null. */
+  async getAccessibleCipher(id: string, userId: string): Promise<AccessibleCipher | null> {
+    const personal = await this.getCipherForUser(id, userId);
+    if (personal) return { cipher: personal, access: FULL_ACCESS, collectionIds: [] };
+    return getOrgCipherForUser(this.db, id, userId);
+  }
+
   async saveCipher(cipher: Cipher): Promise<void> {
     await saveStoredCipher(this.db, this.safeBind.bind(this), cipher);
   }
@@ -594,20 +599,12 @@ export class StorageService {
     return findStoredAttachment(this.db, id);
   }
 
-  async getAttachmentForUser(id: string, userId: string): Promise<Attachment | null> {
-    return findStoredAttachmentForUser(this.db, id, userId);
-  }
-
   async saveAttachment(attachment: Attachment): Promise<void> {
     await saveStoredAttachment(this.db, this.safeBind.bind(this), attachment);
   }
 
   async deleteAttachment(id: string): Promise<void> {
     await deleteStoredAttachment(this.db, id);
-  }
-
-  async deleteAttachmentForUser(id: string, userId: string): Promise<void> {
-    await deleteStoredAttachmentForUser(this.db, id, userId);
   }
 
   async bulkDeleteAttachmentsByIds(ids: string[]): Promise<void> {
@@ -628,10 +625,6 @@ export class StorageService {
 
   async addAttachmentToCipher(cipherId: string, attachmentId: string): Promise<void> {
     await attachStoredAttachmentToCipher(this.db, cipherId, attachmentId);
-  }
-
-  async addAttachmentToCipherForUser(cipherId: string, attachmentId: string, userId: string): Promise<void> {
-    await attachStoredAttachmentToCipherForUser(this.db, cipherId, attachmentId, userId);
   }
 
   async deleteAllAttachmentsByCipher(cipherId: string): Promise<void> {

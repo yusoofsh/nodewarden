@@ -14,6 +14,7 @@ import { buildProfileResponse } from '../utils/profile-response';
 import { collectionDetailsJson, policyJson } from '../utils/organization-response';
 import { listCollectionsForUser, listProfileMemberships, MemberStatus } from '../services/storage-organization-repo';
 import { listPoliciesForUser } from '../services/storage-organization-policy-repo';
+import { listOrgCiphersForUser } from '../services/storage-org-cipher-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -84,8 +85,9 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return cachedResponse;
   }
 
-  const [ciphers, folders, sends, attachmentsByCipher, domainSettings, memberships, collections] = await Promise.all([
+  const [ciphers, orgCiphers, folders, sends, attachmentsByCipher, domainSettings, memberships, collections] = await Promise.all([
     storage.getAllCiphers(userId),
+    listOrgCiphersForUser(env.DB, userId),
     storage.getAllFolders(userId),
     excludeSends ? Promise.resolve([]) : storage.getAllSends(userId),
     storage.getAttachmentsByUserId(userId),
@@ -104,9 +106,16 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     memberships,
   });
 
+  const orgAttachments = await storage.getAttachmentsByCipherIds(orgCiphers.map(({ cipher }) => cipher.id));
   const cipherResponses: CipherResponse[] = [];
   for (const cipher of ciphers) {
     const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris, validFolderIds });
+    if (isCipherResponseSyncCompatible(response)) {
+      cipherResponses.push(response);
+    }
+  }
+  for (const { cipher, access, collectionIds } of orgCiphers) {
+    const response = cipherToResponse(cipher, orgAttachments.get(cipher.id) || [], { preserveRepairableUris, access, collectionIds });
     if (isCipherResponseSyncCompatible(response)) {
       cipherResponses.push(response);
     }

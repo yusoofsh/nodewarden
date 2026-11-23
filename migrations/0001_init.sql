@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS ciphers (
   updated_at TEXT NOT NULL,
   archived_at TEXT,
   deleted_at TEXT,
+  -- Set for an organization cipher; user_id then records who created it.
+  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at);
@@ -337,6 +339,18 @@ CREATE TABLE IF NOT EXISTS collection_members (
 );
 CREATE INDEX IF NOT EXISTS idx_collection_members_member
   ON collection_members(member_id);
+CREATE INDEX IF NOT EXISTS idx_ciphers_organization
+  ON ciphers(organization_id);
+
+CREATE TABLE IF NOT EXISTS collection_ciphers (
+  collection_id TEXT NOT NULL,
+  cipher_id TEXT NOT NULL,
+  PRIMARY KEY (collection_id, cipher_id),
+  FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+  FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_collection_ciphers_cipher
+  ON collection_ciphers(cipher_id);
 
 CREATE TABLE IF NOT EXISTS organization_groups (
   id TEXT PRIMARY KEY,

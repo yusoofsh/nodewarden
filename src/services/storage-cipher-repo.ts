@@ -25,6 +25,7 @@ interface CipherRow {
   updated_at: string;
   archived_at: string | null;
   deleted_at: string | null;
+  organization_id: string | null;
 }
 
 const CIPHER_SCALAR_DATA_KEYS = new Set([
@@ -57,9 +58,17 @@ const CIPHER_SCALAR_DATA_KEYS = new Set([
   'deletedAt',
   'deleted_at',
   'deletedDate',
+  // Server-owned: the organization column, collection links and the caller's access flags.
+  'organizationId',
+  'organization_id',
+  'collectionIds',
+  'organizationUseTotp',
+  'edit',
+  'viewPassword',
+  'permissions',
 ]);
 
-function buildCipherData(cipher: Cipher, folderId: string | null): string {
+export function buildCipherData(cipher: Cipher, folderId: string | null): string {
   const payload: Record<string, unknown> = {
     ...cipher,
     folderId,
@@ -70,7 +79,7 @@ function buildCipherData(cipher: Cipher, folderId: string | null): string {
   return JSON.stringify(payload);
 }
 
-function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
+export function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
   if (!row?.data) return null;
   try {
     const parsed = JSON.parse(row.data) as Cipher;
@@ -90,6 +99,7 @@ function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
       updatedAt: row.updated_at,
       archivedAt: row.archived_at ?? parsed.archivedAt ?? parsed.archivedDate ?? null,
       deletedAt: row.deleted_at ?? parsed.deletedAt ?? parsed.deletedDate ?? null,
+      organizationId: row.organization_id ?? null,
     };
   } catch {
     console.error('Corrupted cipher data, id:', row.id);
@@ -97,9 +107,15 @@ function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
   }
 }
 
-function selectCipherColumns(): string {
-  return 'id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at';
+const CIPHER_COLUMNS = ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at', 'organization_id'];
+
+export function selectCipherColumns(alias = ''): string {
+  return CIPHER_COLUMNS.map((column) => (alias ? `${alias}.${column}` : column)).join(', ');
 }
+
+// A personal cipher belongs to user_id and to no organization. Every user-scoped query here uses it:
+// on an organization cipher user_id only records the creator and grants nothing.
+const PERSONAL = 'user_id = ? AND organization_id IS NULL';
 
 export async function getCipher(db: D1Database, id: string): Promise<Cipher | null> {
   const row = await db
@@ -111,7 +127,7 @@ export async function getCipher(db: D1Database, id: string): Promise<Cipher | nu
 
 export async function getCipherForUser(db: D1Database, id: string, userId: string): Promise<Cipher | null> {
   const row = await db
-    .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE id = ? AND user_id = ?`)
+    .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE id = ? AND ${PERSONAL}`)
     .bind(id, userId)
     .first<CipherRow>();
   return parseCipherRow(row);
@@ -121,11 +137,12 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
   const folderId = normalizeOptionalId(cipher.folderId);
   const data = buildCipherData(cipher, folderId);
   const stmt = db.prepare(
-    'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
-    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at, organization_id) ' +
+    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
     'type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at ' +
-    'WHERE user_id=excluded.user_id'
+    // A save never moves a cipher between owners: sharing has its own statement.
+    'WHERE user_id=excluded.user_id AND organization_id IS excluded.organization_id'
   );
   await safeBind(
     stmt,
@@ -142,7 +159,8 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     cipher.createdAt,
     cipher.updatedAt,
     cipher.archivedAt ?? null,
-    cipher.deletedAt
+    cipher.deletedAt,
+    cipher.organizationId ?? null
   ).run();
 }
 
@@ -158,11 +176,11 @@ export async function updateCipherIfUnchanged(
   const result = await safeBind(
     db.prepare(
       'UPDATE ciphers SET type=?, folder_id=?, name=?, notes=?, favorite=?, data=?, reprompt=?, key=?, updated_at=?, archived_at=?, deleted_at=? ' +
-      'WHERE id=? AND user_id=? AND updated_at=?'
+      'WHERE id=? AND user_id=? AND organization_id IS ? AND updated_at=?'
     ),
     Number(cipher.type) || 1, folderId, cipher.name, cipher.notes, cipher.favorite ? 1 : 0,
     buildCipherData(cipher, folderId), cipher.reprompt ?? 0, cipher.key, cipher.updatedAt,
-    cipher.archivedAt ?? null, cipher.deletedAt, cipher.id, cipher.userId, expectedUpdatedAt
+    cipher.archivedAt ?? null, cipher.deletedAt, cipher.id, cipher.userId, cipher.organizationId ?? null, expectedUpdatedAt
   ).run();
   return result.meta.changes === 1;
 }
@@ -191,7 +209,7 @@ function sanitizeIds(ids: string[]): string[] {
 }
 
 export async function deleteCipher(db: D1Database, id: string, userId: string): Promise<void> {
-  await db.prepare('DELETE FROM ciphers WHERE id = ? AND user_id = ?').bind(id, userId).run();
+  await db.prepare(`DELETE FROM ciphers WHERE id = ? AND ${PERSONAL}`).bind(id, userId).run();
 }
 
 export async function bulkSoftDeleteCiphers(
@@ -216,7 +234,7 @@ export async function bulkSoftDeleteCiphers(
         `UPDATE ciphers
          SET deleted_at = ?, updated_at = ?,
              data = json_remove(data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND id IN (${placeholders})`
+         WHERE ${PERSONAL} AND id IN (${placeholders})`
       )
       .bind(now, now, userId, ...chunk)
       .run();
@@ -247,7 +265,7 @@ export async function bulkRestoreCiphers(
         `UPDATE ciphers
          SET deleted_at = NULL, updated_at = ?,
              data = json_remove(data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND id IN (${placeholders})`
+         WHERE ${PERSONAL} AND id IN (${placeholders})`
       )
       .bind(now, userId, ...chunk)
       .run();
@@ -271,7 +289,7 @@ export async function bulkDeleteCiphers(
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
-    await db.prepare(`DELETE FROM ciphers WHERE user_id = ? AND id IN (${placeholders})`).bind(userId, ...chunk).run();
+    await db.prepare(`DELETE FROM ciphers WHERE ${PERSONAL} AND id IN (${placeholders})`).bind(userId, ...chunk).run();
   }
 
   return updateRevisionDate(userId);
@@ -279,7 +297,7 @@ export async function bulkDeleteCiphers(
 
 export async function getAllCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
   const res = await db
-    .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE user_id = ? ORDER BY updated_at DESC`)
+    .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE ${PERSONAL} ORDER BY updated_at DESC`)
     .bind(userId)
     .all<CipherRow>();
   return (res.results || []).flatMap((row) => {
@@ -301,7 +319,7 @@ export async function getCiphersPage(
   const res = await db
     .prepare(
       `SELECT ${selectCipherColumns()} FROM ciphers
-       WHERE user_id = ?
+       WHERE ${PERSONAL}
        ${whereDeleted}
        ORDER BY updated_at DESC
        LIMIT ? OFFSET ?`
@@ -329,7 +347,7 @@ export async function getCiphersByIds(
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
-    const stmt = db.prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE user_id = ? AND id IN (${placeholders})`);
+    const stmt = db.prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE ${PERSONAL} AND id IN (${placeholders})`);
     const res = await stmt.bind(userId, ...chunk).all<CipherRow>();
     out.push(
       ...(res.results || []).flatMap((row) => {
@@ -363,7 +381,7 @@ export async function bulkMoveCiphers(
         `UPDATE ciphers
          SET folder_id = ?, updated_at = ?,
              data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND id IN (${placeholders})`
+         WHERE ${PERSONAL} AND id IN (${placeholders})`
       )
       .bind(normalizedFolderId, now, userId, ...chunk)
       .run();
@@ -394,7 +412,7 @@ export async function bulkArchiveCiphers(
         `UPDATE ciphers
          SET archived_at = ?, updated_at = ?,
              data = json_remove(data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND id IN (${placeholders})
+         WHERE ${PERSONAL} AND id IN (${placeholders})
            AND deleted_at IS NULL
            AND json_extract(data, '$.deletedAt') IS NULL
            AND json_extract(data, '$.deletedDate') IS NULL`
@@ -428,7 +446,7 @@ export async function bulkUnarchiveCiphers(
         `UPDATE ciphers
          SET archived_at = NULL, updated_at = ?,
              data = json_remove(data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND id IN (${placeholders})`
+         WHERE ${PERSONAL} AND id IN (${placeholders})`
       )
       .bind(now, userId, ...chunk)
       .run();

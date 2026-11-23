@@ -47,6 +47,12 @@ import {
   handleUnarchiveCipher,
 } from './handlers/ciphers';
 import {
+  handleGetOrganizationCipherDetails,
+  handleShareCipher,
+  handleShareCiphers,
+  handleUpdateCipherCollections,
+} from './handlers/org-ciphers';
+import {
   handleGetFolders,
   handleGetFolder,
   handleCreateFolder,
@@ -336,6 +342,28 @@ export async function handleAuthenticatedRoute(
     return null;
   }
 
+  // Administrative variants of the bulk routes: access to organization ciphers is checked per
+  // cipher, and a member with full access may write them all, so they share the handlers.
+  if (path === '/api/ciphers/admin') {
+    if (method === 'POST') return handleCreateCipher(request, env, userId, true);
+    if (method === 'DELETE') return handleBulkPermanentDeleteCiphers(request, env, userId);
+    return null;
+  }
+  if (path === '/api/ciphers/delete-admin') {
+    if (method === 'PUT') return handleBulkDeleteCiphers(request, env, userId);
+    if (method === 'POST') return handleBulkPermanentDeleteCiphers(request, env, userId);
+    return null;
+  }
+  if (path === '/api/ciphers/restore-admin' && method === 'PUT') {
+    return handleBulkRestoreCiphers(request, env, userId);
+  }
+  if (path === '/api/ciphers/share' && (method === 'PUT' || method === 'POST')) {
+    return handleShareCiphers(request, env, userId);
+  }
+  if (path === '/api/ciphers/organization-details' && method === 'GET') {
+    return handleGetOrganizationCipherDetails(request, env, userId);
+  }
+
   if (path === '/api/ciphers/import' && method === 'POST') {
     return handleCiphersImport(request, env, userId);
   }
@@ -374,6 +402,18 @@ export async function handleAuthenticatedRoute(
       if (method === 'PUT' || method === 'POST') return handleUpdateCipher(request, env, userId, cipherId);
       if (method === 'DELETE') return handleDeleteCipherCompat(request, env, userId, cipherId);
     }
+    if (subPath === '/admin') {
+      if (method === 'GET') return handleGetCipher(request, env, userId, cipherId);
+      if (method === 'PUT' || method === 'POST') return handleUpdateCipher(request, env, userId, cipherId, true);
+      if (method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId);
+    }
+    if (subPath === '/delete-admin' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
+    if (subPath === '/delete-admin' && method === 'POST') return handlePermanentDeleteCipher(request, env, userId, cipherId);
+    if (subPath === '/restore-admin' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
+    if ((subPath === '/collections' || subPath === '/collections_v2' || subPath === '/collections-admin') && (method === 'PUT' || method === 'POST')) {
+      const variant = subPath === '/collections' ? 'user' : subPath === '/collections_v2' ? 'v2' : 'admin';
+      return handleUpdateCipherCollections(request, env, userId, cipherId, variant);
+    }
 
     if (subPath === '/delete' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/delete' && (method === 'DELETE' || method === 'POST')) return handlePermanentDeleteCipher(request, env, userId, cipherId);
@@ -381,10 +421,18 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
-    if (subPath === '/share' && method === 'POST') return handleGetCipher(request, env, userId, cipherId);
+    if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
     if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
+
+    const attachmentAdminMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/(admin|delete-admin)$/i);
+    if (attachmentAdminMatch) {
+      const attachmentId = attachmentAdminMatch[1];
+      if (method === 'GET' && attachmentAdminMatch[2] === 'admin') return handleGetAttachment(request, env, userId, cipherId, attachmentId);
+      if (method === 'DELETE' && attachmentAdminMatch[2] === 'admin') return handleDeleteAttachment(request, env, userId, cipherId, attachmentId);
+      if (method === 'POST' && attachmentAdminMatch[2] === 'delete-admin') return handleDeleteAttachment(request, env, userId, cipherId, attachmentId);
+    }
 
     const attachmentMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)$/i);
     if (attachmentMatch) {

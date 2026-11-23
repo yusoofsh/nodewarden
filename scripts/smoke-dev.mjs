@@ -220,6 +220,40 @@ const groupSync = await call('GET', '/api/sync', { token: secondToken });
 check('the group gives the member its collection', teamCollections(groupSync.json).length === 1 && teamCollections(groupSync.json)[0].readOnly === true, JSON.stringify(groupSync.json?.collections));
 check('delete the group', (await call('DELETE', `${teamPath}/groups/${group.json?.id}`, { token })).status === 200);
 check('the member loses the collection', teamCollections((await call('GET', '/api/sync', { token: secondToken })).json).length === 0);
+
+// Organization ciphers: create one in a collection, give the member read-only access, share a
+// personal cipher, move collections, list them for the admin console and delete them.
+const teamCollectionId = teamCollection?.id;
+const orgItem = await call('POST', '/api/ciphers/create', {
+  token,
+  body: { cipher: { type: 1, organizationId: teamOrg.json?.id, name: enc('org-item'), login: { username: enc('ou'), password: enc('op'), uris: [] } }, collectionIds: [teamCollectionId] },
+});
+check('create an organization cipher', orgItem.status === 200 && orgItem.json?.organizationId === teamOrg.json?.id && orgItem.json?.collectionIds?.[0] === teamCollectionId, `${orgItem.status} ${orgItem.text}`);
+check('the member cannot see it without a collection', !(await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.some((c) => c.id === orgItem.json?.id));
+const editors = await call('POST', `${teamPath}/groups`, {
+  token, body: { name: 'Editors', collections: [{ id: teamCollectionId, readOnly: false, hidePasswords: false, manage: false }], users: [invitedRow?.id] },
+});
+const groupItem = (await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.find((c) => c.id === orgItem.json?.id);
+check('a group collection gives the member the cipher', groupItem?.edit === true && groupItem?.viewPassword === true, JSON.stringify(groupItem));
+await call('DELETE', `${teamPath}/groups/${editors.json?.id}`, { token });
+await call('PUT', `${teamPath}/collections/${teamCollectionId}`, { token, body: { name: enc('default'), users: [{ id: invitedRow?.id, readOnly: true, hidePasswords: true, manage: false }], groups: [] } });
+const memberItem = (await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.find((c) => c.id === orgItem.json?.id);
+check('a read-only member syncs it without edit or passwords', memberItem?.edit === false && memberItem?.viewPassword === false, JSON.stringify(memberItem));
+const memberEdit = await call('PUT', `/api/ciphers/${orgItem.json?.id}`, { token: secondToken, body: { type: 1, organizationId: teamOrg.json?.id, name: enc('x'), login: {} } });
+check('a read-only member cannot edit it', memberEdit.status === 400, `${memberEdit.status} ${memberEdit.text}`);
+const personalItem = await call('POST', '/api/ciphers', { token, body: { type: 2, name: enc('to-share'), secureNote: { type: 0 } } });
+const shared = await call('PUT', `/api/ciphers/${personalItem.json?.id}/share`, {
+  token, body: { cipher: { type: 2, organizationId: teamOrg.json?.id, name: enc('shared'), secureNote: { type: 0 } }, collectionIds: [teamCollectionId] },
+});
+check('share a personal cipher', shared.status === 200 && shared.json?.organizationId === teamOrg.json?.id, `${shared.status} ${shared.text}`);
+const moved = await call('PUT', `/api/ciphers/${shared.json?.id}/collections-admin`, { token, body: { collectionIds: [] } });
+check('remove it from its collection', moved.status === 200 && moved.json?.collectionIds?.length === 0, `${moved.status} ${moved.text}`);
+const orgDetails = await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token });
+check('organization details list both', orgDetails.json?.data?.length === 2, orgDetails.text.slice(0, 300));
+check('the member cannot list organization details', (await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token: secondToken })).status === 400);
+check('trash an organization cipher as admin', (await call('PUT', `/api/ciphers/${shared.json?.id}/delete-admin`, { token })).status === 200);
+check('delete organization ciphers in bulk as admin', (await call('DELETE', '/api/ciphers/admin', { token, body: { ids: [orgItem.json?.id, shared.json?.id], organizationId: teamOrg.json?.id } })).status === 204);
+check('they are gone', (await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token })).json?.data?.length === 0);
 check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
 check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
 await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });

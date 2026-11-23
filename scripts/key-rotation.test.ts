@@ -370,3 +370,24 @@ test('an emergency contact confirmed after the read aborts the rotation', async 
   assert.deepEqual(after[1], before[1], 'ciphers untouched');
   assert.ok(after[10].every((r: any) => r.key_encrypted !== '4.newwrapped-1'), 'emergency keys untouched');
 });
+
+test('a rotation re-keys personal ciphers only; organization ciphers keep the organization key', async () => {
+  const { env, storage, db } = await setup();
+  const ORG = 'eeeeeeee-0000-0000-0000-000000000001';
+  const ORG_CIPHER = 'bbbbbbbb-0000-0000-0000-000000000003';
+  await db.prepare("INSERT INTO organizations(id, name, billing_email, created_at, updated_at) VALUES (?, 'o', 'b', '2026-01-01', '2026-01-01')").bind(ORG).run();
+  await db
+    .prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, created_at, updated_at) VALUES ('m1', ?, ?, '4.orgkey', 2, 0, 1, '2026-01-01', '2026-01-01')")
+    .bind(ORG, USER)
+    .run();
+  // Created by this user, so its user_id is theirs, but it is encrypted with the organization key.
+  await storage.saveCipher(cipher(ORG_CIPHER, { folderId: null, name: old('org-name'), organizationId: ORG }));
+  const before = await db.prepare('SELECT * FROM ciphers WHERE id = ?').bind(ORG_CIPHER).first();
+
+  // Clients send organization ciphers too, which the rotation skips.
+  const body = payload() as any;
+  body.accountData.ciphers.push({ id: ORG_CIPHER, organizationId: ORG, type: 1, name: fresh('org-name') });
+  assert.equal((await call(env, body)).status, 200);
+  assert.equal((await storage.getCipherForUser(CIPHER, USER))?.name, fresh('name'));
+  assert.deepEqual(await db.prepare('SELECT * FROM ciphers WHERE id = ?').bind(ORG_CIPHER).first(), before);
+});

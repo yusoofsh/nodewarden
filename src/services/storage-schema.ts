@@ -43,6 +43,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type INTEGER NOT NULL, folder_id TEXT, name TEXT, notes TEXT, ' +
   'favorite INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, reprompt INTEGER, key TEXT, ' +
   'created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT, ' +
+  'organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'ALTER TABLE ciphers ADD COLUMN archived_at TEXT',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at)',
@@ -211,6 +212,24 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, type INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT \'null\', updated_at TEXT NOT NULL, ' +
   'UNIQUE (organization_id, type), ' +
   'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+
+  // An organization cipher has organization_id set; user_id stays NOT NULL and records who created it.
+  // Personal ciphers are the rows with no organization_id.
+  'ALTER TABLE ciphers ADD COLUMN organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE',
+  'CREATE INDEX IF NOT EXISTS idx_ciphers_organization ON ciphers(organization_id)',
+  'CREATE TABLE IF NOT EXISTS collection_ciphers (' +
+  'collection_id TEXT NOT NULL, cipher_id TEXT NOT NULL, ' +
+  'PRIMARY KEY (collection_id, cipher_id), ' +
+  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collection_ciphers_cipher ON collection_ciphers(cipher_id)',
+  // Before this column existed, /api/ciphers/create stored a client organizationId in the cipher JSON and
+  // answered it back, so the creator's clients encrypted the item with the organization key. Adopt those
+  // rows into their organization when the creator is a confirmed member of it.
+  'UPDATE ciphers SET organization_id = lower(json_extract(data, \'$.organizationId\')) ' +
+  'WHERE organization_id IS NULL AND json_valid(data) AND json_type(data, \'$.organizationId\') = \'text\' ' +
+  'AND EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = lower(json_extract(ciphers.data, \'$.organizationId\')) ' +
+  'AND m.user_id = ciphers.user_id AND m.status = 2)',
 
   'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
   'ip TEXT PRIMARY KEY, attempts INTEGER NOT NULL, locked_until INTEGER, updated_at INTEGER NOT NULL)',

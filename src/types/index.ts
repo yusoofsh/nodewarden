@@ -271,6 +271,8 @@ export interface Cipher {
   updatedAt: string;
   archivedAt: string | null;
   deletedAt: string | null;
+  /** Set for an organization cipher, from the column; userId then records who created it. */
+  organizationId?: string | null;
   /** Allow unknown fields from Bitwarden clients to be stored and passed through transparently. */
   [key: string]: any;
 }
