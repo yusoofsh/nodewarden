@@ -20,6 +20,7 @@ import { roleManageError } from '../services/org-access';
 import { groupDetailsJson, groupJson } from '../utils/organization-response';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { type EventActor, EventType, logEvents } from '../services/events';
 import { accessFlags, isRecord, list, readBody, str, touchOrganization } from './organizations';
 
 const ok = () => new Response(null, { status: 200 });
@@ -81,42 +82,54 @@ async function readGroupBody(
   return { name, externalId: str(body.externalId) || null, access: [...access.values()], memberIds: [...members] };
 }
 
-async function writeGroup(env: Env, group: Group, request: Request, isNew: boolean): Promise<Response> {
+async function writeGroup(env: Env, group: Group, request: Request, isNew: boolean, actor: EventActor): Promise<Response> {
   const parsed = await readGroupBody(request, env.DB, group.organizationId);
   if (parsed instanceof Response) return parsed;
   // As in Vaultwarden, the external id is set on create and never changed by an update.
   const saved = { ...group, name: parsed.name, externalId: isNew ? parsed.externalId : group.externalId };
   await saveGroup(env.DB, saved, parsed.access.map((a) => ({ ...a, groupId: group.id })), parsed.memberIds, isNew);
   await touchOrganization(env.DB, group.organizationId);
+  // As in Vaultwarden, each member the request names gets an event too.
+  await logEvents(env, actor, [
+    { type: isNew ? EventType.GroupCreated : EventType.GroupUpdated, organizationId: group.organizationId, groupId: group.id },
+    ...parsed.memberIds.map((memberId) => ({ type: EventType.OrganizationUserUpdatedGroups, organizationId: group.organizationId, memberId })),
+  ]);
   return jsonResponse(groupJson(saved));
 }
 
 // POST /api/organizations/{id}/groups
-export async function handleCreateGroup(request: Request, env: Env, organizationId: string): Promise<Response> {
+export async function handleCreateGroup(request: Request, env: Env, organizationId: string, actor: EventActor): Promise<Response> {
   const now = new Date().toISOString();
-  return writeGroup(env, { id: generateUUID(), organizationId, name: '', externalId: null, createdAt: now, updatedAt: now }, request, true);
+  return writeGroup(env, { id: generateUUID(), organizationId, name: '', externalId: null, createdAt: now, updatedAt: now }, request, true, actor);
 }
 
 // PUT /api/organizations/{id}/groups/{groupId}
 // Replaces the group's collection access and members.
-export async function handleUpdateGroup(request: Request, env: Env, organizationId: string, groupId: string): Promise<Response> {
+export async function handleUpdateGroup(
+  request: Request,
+  env: Env,
+  organizationId: string,
+  groupId: string,
+  actor: EventActor
+): Promise<Response> {
   const group = await getGroup(env.DB, organizationId, groupId);
   if (!group) return errorResponse(GROUP_NOT_FOUND, 400);
-  return writeGroup(env, { ...group, updatedAt: new Date().toISOString() }, request, false);
+  return writeGroup(env, { ...group, updatedAt: new Date().toISOString() }, request, false, actor);
 }
 
 // DELETE /api/organizations/{id}/groups/{groupId}
-export async function handleDeleteGroup(env: Env, organizationId: string, groupId: string): Promise<Response> {
-  return handleBulkDeleteGroups(env, organizationId, [groupId]);
+export async function handleDeleteGroup(env: Env, organizationId: string, groupId: string, actor: EventActor): Promise<Response> {
+  return handleBulkDeleteGroups(env, organizationId, [groupId], actor);
 }
 
 // DELETE /api/organizations/{id}/groups
 // Every id is checked before any group is deleted.
-export async function handleBulkDeleteGroups(env: Env, organizationId: string, groupIds: string[]): Promise<Response> {
+export async function handleBulkDeleteGroups(env: Env, organizationId: string, groupIds: string[], actor: EventActor): Promise<Response> {
   const known = new Set((await listGroups(env.DB, organizationId)).map((g) => g.id));
   if (groupIds.some((id) => !known.has(id))) return errorResponse(GROUP_NOT_FOUND, 400);
   for (const id of groupIds) await deleteGroup(env.DB, organizationId, id);
   await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, groupIds.map((groupId) => ({ type: EventType.GroupDeleted, organizationId, groupId })));
   return ok();
 }
 
@@ -152,7 +165,8 @@ export async function handleUpdateMemberGroups(
   request: Request,
   env: Env,
   caller: OrganizationMember,
-  memberId: string
+  memberId: string,
+  actor: EventActor
 ): Promise<Response> {
   const body = await readBody(request);
   if (!body) return errorResponse('Invalid JSON', 400);
@@ -164,5 +178,11 @@ export async function handleUpdateMemberGroups(
   if (typeof groupIds === 'string') return errorResponse(groupIds, 400);
   await setMemberGroups(env.DB, member.id, groupIds);
   await touchOrganization(env.DB, caller.organizationId);
+  await logEvents(env, actor, [{
+    type: EventType.OrganizationUserUpdatedGroups,
+    organizationId: member.organizationId,
+    memberId: member.id,
+    userId: member.userId,
+  }]);
   return ok();
 }

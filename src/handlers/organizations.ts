@@ -37,6 +37,7 @@ import {
   organizationJson,
 } from '../utils/organization-response';
 import { errorResponse, jsonResponse } from '../utils/response';
+import { type EventActor, EventType, logEvents } from '../services/events';
 import { generateUUID } from '../utils/uuid';
 
 type Json = Record<string, unknown>;
@@ -125,7 +126,7 @@ export async function handleGetOrganization(env: Env, organizationId: string): P
 }
 
 // PUT /api/organizations/{id}
-export async function handleUpdateOrganization(request: Request, env: Env, organizationId: string): Promise<Response> {
+export async function handleUpdateOrganization(request: Request, env: Env, organizationId: string, actor: EventActor): Promise<Response> {
   const body = await readBody(request);
   if (!body) return errorResponse('Invalid JSON', 400);
   const name = str(body.name);
@@ -134,6 +135,7 @@ export async function handleUpdateOrganization(request: Request, env: Env, organ
 
   await updateOrganization(env.DB, organizationId, name, billingEmail);
   await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, [{ type: EventType.OrganizationUpdated, organizationId }]);
   return handleGetOrganization(env, organizationId);
 }
 
@@ -162,11 +164,14 @@ export async function handleDeleteOrganization(
 }
 
 // POST /api/organizations/{id}/leave
-export async function handleLeaveOrganization(env: Env, member: OrganizationMember): Promise<Response> {
+export async function handleLeaveOrganization(env: Env, member: OrganizationMember, actor: EventActor): Promise<Response> {
   if (await isLastConfirmedOwner(env.DB, member)) {
     return errorResponse("The last owner can't leave", 400);
   }
   await deleteMember(env.DB, member.id);
+  await logEvents(env, actor, [
+    { type: EventType.OrganizationUserLeft, organizationId: member.organizationId, memberId: member.id, userId: member.userId },
+  ]);
   await touchUsers(env.DB, [member.userId]);
   return new Response(null, { status: 200 });
 }
@@ -312,12 +317,18 @@ async function writeCollection(
   viewer: OrganizationMember,
   collection: Collection,
   parsed: { access: Omit<CollectionAccess, 'collectionId'>[]; groupAccess: Omit<GroupAccess, 'collectionId'>[] },
-  isNew: boolean
+  isNew: boolean,
+  actor: EventActor
 ): Promise<Response> {
   const rows = parsed.access.map((a) => ({ ...a, collectionId: collection.id }));
   const groupRows = parsed.groupAccess.map((a) => ({ ...a, collectionId: collection.id }));
   await saveCollection(env.DB, collection, rows, groupRows, isNew);
   await touchOrganization(env.DB, collection.organizationId);
+  await logEvents(env, actor, [{
+    type: isNew ? EventType.CollectionCreated : EventType.CollectionUpdated,
+    organizationId: collection.organizationId,
+    collectionId: collection.id,
+  }]);
   return jsonResponse(collectionDetailsJson(collection, viewer, rows.find((a) => a.memberId === viewer.id) ?? null));
 }
 
@@ -326,13 +337,14 @@ export async function handleCreateCollection(
   request: Request,
   env: Env,
   viewer: OrganizationMember,
-  organizationId: string
+  organizationId: string,
+  actor: EventActor
 ): Promise<Response> {
   const parsed = await readCollectionBody(request, env.DB, organizationId);
   if (parsed instanceof Response) return parsed;
   const now = new Date().toISOString();
   const collection = { id: generateUUID(), organizationId, name: parsed.name, externalId: parsed.externalId, createdAt: now, updatedAt: now };
-  return writeCollection(env, viewer, collection, parsed, true);
+  return writeCollection(env, viewer, collection, parsed, true, actor);
 }
 
 // PUT /api/organizations/{id}/collections/{collectionId}
@@ -341,20 +353,22 @@ export async function handleUpdateCollection(
   env: Env,
   viewer: OrganizationMember,
   organizationId: string,
-  collectionId: string
+  collectionId: string,
+  actor: EventActor
 ): Promise<Response> {
   const existing = await getCollection(env.DB, organizationId, collectionId);
   if (!existing) return errorResponse('Collection not found', 404);
   const parsed = await readCollectionBody(request, env.DB, organizationId);
   if (parsed instanceof Response) return parsed;
   const collection = { ...existing, name: parsed.name, externalId: parsed.externalId, updatedAt: new Date().toISOString() };
-  return writeCollection(env, viewer, collection, parsed, false);
+  return writeCollection(env, viewer, collection, parsed, false, actor);
 }
 
 // DELETE /api/organizations/{id}/collections/{collectionId}
-export async function handleDeleteCollection(env: Env, organizationId: string, collectionId: string): Promise<Response> {
+export async function handleDeleteCollection(env: Env, organizationId: string, collectionId: string, actor: EventActor): Promise<Response> {
   if (!(await getCollection(env.DB, organizationId, collectionId))) return errorResponse('Collection not found', 404);
   await deleteCollection(env.DB, organizationId, collectionId);
   await touchOrganization(env.DB, organizationId);
+  await logEvents(env, actor, [{ type: EventType.CollectionDeleted, organizationId, collectionId }]);
   return new Response(null, { status: 200 });
 }

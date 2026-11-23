@@ -27,6 +27,7 @@ import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from '.
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { EventType, cipherEvent, eventActor, listCipherEvents, logEvents } from '../services/events';
 import { readNullableFullUpdateField } from './cipher-full-update';
 import {
   type AccessibleCipher,
@@ -1220,6 +1221,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   // Rejected updates must not modify attachment metadata either.
   await syncIncomingAttachmentMetadata(storage, cipher.id, cipherData);
   await publishCipherChange(request, env, storage, userId, cipher, 'update');
+  await logEvents(env, eventActor(request, userId), cipherEvent(EventType.CipherUpdated, cipher));
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
 
   return jsonResponse(cipherResponseFor(request, { ...accessible, cipher }, attachments));
@@ -1242,6 +1244,7 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
   syncCipherComputedAliases(cipher);
   await storage.saveCipher(cipher);
   await publishCipherChange(request, env, storage, userId, cipher, 'delete');
+  await logEvents(env, eventActor(request, userId), cipherEvent(EventType.CipherSoftDeleted, cipher));
   await writeCipherAudit(storage, request, userId, 'cipher.delete.soft', {
     id: cipher.id,
     type: cipher.type,
@@ -1301,6 +1304,7 @@ async function deleteCipherPermanently(
     await storage.deleteCipher(cipher.id, userId);
   }
   await publishCipherChange(request, env, storage, userId, cipher, 'delete');
+  await logEvents(env, eventActor(request, userId), cipherEvent(EventType.CipherDeleted, cipher));
   await writeCipherAudit(storage, request, userId, 'cipher.delete.permanent', {
     id: cipher.id,
     type: cipher.type,
@@ -1327,6 +1331,7 @@ export async function handleRestoreCipher(request: Request, env: Env, userId: st
   syncCipherComputedAliases(cipher);
   await storage.saveCipher(cipher);
   await publishCipherChange(request, env, storage, userId, cipher, 'update');
+  await logEvents(env, eventActor(request, userId), cipherEvent(EventType.CipherRestored, cipher));
 
   return jsonResponse(cipherResponseFor(request, accessible));
 }
@@ -1556,6 +1561,7 @@ export async function handleBulkDeleteCiphers(request: Request, env: Env, userId
   if (orgIds.length) {
     await setOrgCiphersDeletedAt(env.DB, orgIds, new Date().toISOString());
     await publishOrgCipherChanges(request, env, await listOrganizationsOfCiphers(env.DB, orgIds));
+    await logEvents(env, eventActor(request, userId), await listCipherEvents(env.DB, EventType.CipherSoftDeleted, orgIds));
   }
 
   return new Response(null, { status: 204 });
@@ -1585,6 +1591,7 @@ export async function handleBulkRestoreCiphers(request: Request, env: Env, userI
   if (orgIds.length) {
     await setOrgCiphersDeletedAt(env.DB, orgIds, null);
     await publishOrgCipherChanges(request, env, await listOrganizationsOfCiphers(env.DB, orgIds));
+    await logEvents(env, eventActor(request, userId), await listCipherEvents(env.DB, EventType.CipherRestored, orgIds));
   }
 
   return buildCipherListResponse(request, storage, env, userId, body.ids);
@@ -1620,8 +1627,10 @@ export async function handleBulkPermanentDeleteCiphers(request: Request, env: En
   await deleteAllAttachmentsForCiphers(env, [...ownedIds, ...orgIds]);
   if (orgIds.length) {
     const organizationIds = await listOrganizationsOfCiphers(env.DB, orgIds);
+    const events = await listCipherEvents(env.DB, EventType.CipherDeleted, orgIds);
     await deleteOrgCiphers(env.DB, orgIds);
     await publishOrgCipherChanges(request, env, organizationIds);
+    await logEvents(env, eventActor(request, userId), events);
   }
 
   const revisionDate = await storage.bulkDeleteCiphers(ownedIds, userId);

@@ -34,6 +34,7 @@ import { listGroupMembers } from '../services/storage-organization-group-repo';
 import { readMemberGroupIds } from './organization-groups';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { type EventActor, EventType, logEvents } from '../services/events';
 import { accessFlags, isRecord, list, queryFlag, readBody, str, touchUsers } from './organizations';
 
 type Json = Record<string, unknown>;
@@ -76,11 +77,13 @@ async function readRoleAndAccess(
   return { type, accessAll, access: accessAll ? [] : [...access.values()], groupIds };
 }
 
+const memberEvent = (type: number, m: OrganizationMember) => ({ type, organizationId: m.organizationId, memberId: m.id, userId: m.userId });
+
 const withMember = (templates: AccessTemplate[], memberId: string): CollectionAccess[] => templates.map((a) => ({ ...a, memberId }));
 
 // POST /api/organizations/{id}/users/invite
 // Every email is checked before any row is written, so a refused request leaves nothing behind.
-export async function handleInviteMembers(request: Request, env: Env, caller: OrganizationMember): Promise<Response> {
+export async function handleInviteMembers(request: Request, env: Env, caller: OrganizationMember, actor: EventActor): Promise<Response> {
   const body = await readBody(request);
   if (!body) return errorResponse('Invalid JSON', 400);
   const emails = [...new Set((Array.isArray(body.emails) ? body.emails : []).map((e) => str(e).toLowerCase()).filter(Boolean))];
@@ -114,6 +117,7 @@ export async function handleInviteMembers(request: Request, env: Env, caller: Or
     members.flatMap((m) => withMember(parsed.access, m.id)),
     members.flatMap((m) => (parsed.groupIds ?? []).map((groupId) => ({ groupId, memberId: m.id })))
   );
+  await logEvents(env, actor, members.map((m) => memberEvent(EventType.OrganizationUserInvited, m)));
   return ok();
 }
 
@@ -124,7 +128,7 @@ async function reinvite(env: Env, caller: OrganizationMember, memberId: string):
   return null;
 }
 
-async function confirm(env: Env, caller: OrganizationMember, memberId: string, key: string): ActionResult {
+async function confirm(env: Env, caller: OrganizationMember, memberId: string, key: string, actor: EventActor): ActionResult {
   if (!key || !memberId) return 'Key or UserId is not set, unable to process request';
   const member = await getMemberById(env.DB, caller.organizationId, memberId);
   if (!member) return "The specified user isn't a member of the organization";
@@ -132,10 +136,11 @@ async function confirm(env: Env, caller: OrganizationMember, memberId: string, k
     return 'User in invalid state';
   }
   await touchUsers(env.DB, [member.userId]);
+  await logEvents(env, actor, [memberEvent(EventType.OrganizationUserConfirmed, member)]);
   return null;
 }
 
-async function remove(env: Env, caller: OrganizationMember, memberId: string): ActionResult {
+async function remove(env: Env, caller: OrganizationMember, memberId: string, actor: EventActor): ActionResult {
   const member = await getMemberById(env.DB, caller.organizationId, memberId);
   if (!member) return "User to delete isn't member of the organization";
   if (member.id === caller.id) return 'You cannot remove yourself';
@@ -144,6 +149,7 @@ async function remove(env: Env, caller: OrganizationMember, memberId: string): A
   if (await isLastConfirmedOwner(env.DB, member)) return "Can't delete the last owner";
   await deleteMember(env.DB, member.id);
   await touchUsers(env.DB, [member.userId]);
+  await logEvents(env, actor, [memberEvent(EventType.OrganizationUserRemoved, member)]);
   return null;
 }
 
@@ -163,28 +169,35 @@ export async function handleBulkReinviteMembers(request: Request, env: Env, call
 }
 
 // POST /api/organizations/{id}/users/{memberId}/confirm
-export async function handleConfirmMember(request: Request, env: Env, caller: OrganizationMember, memberId: string): Promise<Response> {
-  return single(confirm(env, caller, memberId, str((await readBody(request))?.key)));
+export async function handleConfirmMember(
+  request: Request,
+  env: Env,
+  caller: OrganizationMember,
+  memberId: string,
+  actor: EventActor
+): Promise<Response> {
+  return single(confirm(env, caller, memberId, str((await readBody(request))?.key), actor));
 }
 
 // POST /api/organizations/{id}/users/confirm
-export async function handleBulkConfirmMembers(request: Request, env: Env, caller: OrganizationMember): Promise<Response> {
+export async function handleBulkConfirmMembers(request: Request, env: Env, caller: OrganizationMember, actor: EventActor): Promise<Response> {
   const body = await readBody(request);
   const results = [];
   for (const entry of Array.isArray(body?.keys) ? body.keys : []) {
     const id = isRecord(entry) ? str(entry.id).toLowerCase() : '';
-    results.push(bulkResult(id, await confirm(env, caller, id, isRecord(entry) ? str(entry.key) : '')));
+    results.push(bulkResult(id, await confirm(env, caller, id, isRecord(entry) ? str(entry.key) : '', actor)));
   }
   return list(results);
 }
 
 // DELETE /api/organizations/{id}/users/{memberId}
-export const handleDeleteMember = (env: Env, caller: OrganizationMember, memberId: string) => single(remove(env, caller, memberId));
+export const handleDeleteMember = (env: Env, caller: OrganizationMember, memberId: string, actor: EventActor) =>
+  single(remove(env, caller, memberId, actor));
 
 // DELETE /api/organizations/{id}/users
-export async function handleBulkDeleteMembers(request: Request, env: Env, caller: OrganizationMember): Promise<Response> {
+export async function handleBulkDeleteMembers(request: Request, env: Env, caller: OrganizationMember, actor: EventActor): Promise<Response> {
   const results = [];
-  for (const id of ids(await readBody(request))) results.push(bulkResult(id, await remove(env, caller, id)));
+  for (const id of ids(await readBody(request))) results.push(bulkResult(id, await remove(env, caller, id, actor)));
   return list(results);
 }
 
@@ -214,7 +227,13 @@ export async function handleGetMember(request: Request, env: Env, caller: Organi
 
 // PUT /api/organizations/{id}/users/{memberId}
 // Sets the member's role and replaces its collection access.
-export async function handleUpdateMember(request: Request, env: Env, caller: OrganizationMember, memberId: string): Promise<Response> {
+export async function handleUpdateMember(
+  request: Request,
+  env: Env,
+  caller: OrganizationMember,
+  memberId: string,
+  actor: EventActor
+): Promise<Response> {
   const body = await readBody(request);
   if (!body) return errorResponse('Invalid JSON', 400);
   const member = await getMemberById(env.DB, caller.organizationId, memberId);
@@ -230,6 +249,7 @@ export async function handleUpdateMember(request: Request, env: Env, caller: Org
   }
   await updateMemberAccess(env.DB, member, parsed.type, parsed.accessAll, withMember(parsed.access, member.id), parsed.groupIds);
   await touchUsers(env.DB, [member.userId]);
+  await logEvents(env, actor, [memberEvent(EventType.OrganizationUserUpdated, member)]);
   return ok();
 }
 

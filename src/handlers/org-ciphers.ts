@@ -1,6 +1,7 @@
 // Organization ciphers: creating one, sharing personal ciphers into an organization, changing a
 // cipher's collections and the admin console listing. Follows Vaultwarden's src/api/core/ciphers.rs.
 // Every check runs before anything is written.
+import { EventType, eventActor, logEvents } from '../services/events';
 import type { Cipher, Env } from '../types';
 import { StorageService } from '../services/storage';
 import {
@@ -76,6 +77,7 @@ export async function createOrgCipher(
   clearPerUserCipherState(cipher);
   await insertOrgCipher(env.DB, cipher, collectionIds);
   await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  await logEvents(env, eventActor(request, userId), [{ type: EventType.CipherCreated, organizationId, cipherId: cipher.id }]);
   return respondWithOrgCipher(request, env, userId, { cipher, access: FULL_ACCESS, collectionIds });
 }
 
@@ -141,6 +143,7 @@ export async function handleShareCipher(request: Request, env: Env, userId: stri
 
   if (!(await applyShare(storage, env, plan, organizationId, collectionIds))) return errorResponse(STALE, 400);
   await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  await logEvents(env, eventActor(request, userId), [{ type: EventType.CipherShared, organizationId, cipherId: plan.cipher.id }]);
   return respondWithOrgCipher(request, env, userId, { cipher: plan.cipher, access: FULL_ACCESS, collectionIds });
 }
 
@@ -183,6 +186,7 @@ export async function handleShareCiphers(request: Request, env: Env, userId: str
     if (await applyShare(storage, env, plan, organizationId, collectionIds)) shared.push(plan.cipher);
   }
   await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  await logEvents(env, eventActor(request, userId), shared.map((c) => ({ type: EventType.CipherShared, organizationId, cipherId: c.id })));
 
   const attachments = await storage.getAttachmentsByCipherIds(shared.map((c) => c.id));
   return list(
@@ -225,6 +229,7 @@ export async function handleUpdateCipherCollections(
 
   await updateCipherCollections(env.DB, cipherId, organizationId, add, remove);
   await touchOrganizationVault(env, organizationId, readActingDeviceIdentifier(request));
+  await logEvents(env, eventActor(request, userId), [{ type: EventType.CipherUpdatedCollections, organizationId, cipherId: accessible.cipher.id }]);
   const storage = new StorageService(env.DB);
   const after = (await getOrgCipherForUser(env.DB, cipherId, userId)) ?? { ...accessible, collectionIds: [] };
   const response = cipherResponseFor(request, after, await storage.getAttachmentsByCipher(cipherId));

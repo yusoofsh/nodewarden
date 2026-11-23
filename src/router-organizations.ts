@@ -44,13 +44,15 @@ import {
   readGroupIds,
 } from './handlers/organization-groups';
 import { handleGetMasterPasswordPolicy, handleGetPolicy, handleListPolicies, handlePutPolicy } from './handlers/organization-policies';
+import { handleGetMemberEvents, handleGetOrganizationEvents } from './handlers/events';
+import { type EventActor, eventActor } from './services/events';
 
 interface OrgRoute {
   method: string;
   // Matched against the path after /api/organizations/{id}; groups after the first are passed on.
   sub: RegExp;
   role: OrgRole;
-  handle: (ctx: { request: Request; env: Env; userId: string; member: OrganizationMember; orgId: string; params: string[] }) => Promise<Response>;
+  handle: (ctx: { request: Request; env: Env; userId: string; member: OrganizationMember; orgId: string; params: string[]; actor: EventActor }) => Promise<Response>;
 }
 
 const ID = '([a-f0-9-]+)';
@@ -59,43 +61,45 @@ const ID = '([a-f0-9-]+)';
 // Anything not listed falls through, so unimplemented routes stay unmatched.
 const ORG_ROUTES: OrgRoute[] = [
   { method: 'GET', sub: /^$/, role: 'owner', handle: ({ env, orgId }) => handleGetOrganization(env, orgId) },
-  { method: 'PUT', sub: /^$/, role: 'owner', handle: ({ request, env, orgId }) => handleUpdateOrganization(request, env, orgId) },
+  { method: 'PUT', sub: /^$/, role: 'owner', handle: ({ request, env, orgId, actor }) => handleUpdateOrganization(request, env, orgId, actor) },
   { method: 'DELETE', sub: /^$/, role: 'owner', handle: ({ request, env, userId, orgId }) => handleDeleteOrganization(request, env, userId, orgId) },
-  { method: 'POST', sub: /^\/leave$/, role: 'member', handle: ({ env, member }) => handleLeaveOrganization(env, member) },
+  { method: 'POST', sub: /^\/leave$/, role: 'member', handle: ({ env, member, actor }) => handleLeaveOrganization(env, member, actor) },
   { method: 'GET', sub: /^\/(?:public-key|keys)$/, role: 'member', handle: ({ env, orgId }) => handleGetOrganizationPublicKey(env, orgId) },
   { method: 'GET', sub: /^\/users$/, role: 'admin', handle: ({ request, env, orgId }) => handleGetOrganizationMembers(request, env, orgId) },
-  { method: 'POST', sub: /^\/users\/invite$/, role: 'admin', handle: ({ request, env, member }) => handleInviteMembers(request, env, member) },
+  { method: 'POST', sub: /^\/users\/invite$/, role: 'admin', handle: ({ request, env, member, actor }) => handleInviteMembers(request, env, member, actor) },
   { method: 'POST', sub: /^\/users\/reinvite$/, role: 'admin', handle: ({ request, env, member }) => handleBulkReinviteMembers(request, env, member) },
-  { method: 'POST', sub: /^\/users\/confirm$/, role: 'admin', handle: ({ request, env, member }) => handleBulkConfirmMembers(request, env, member) },
+  { method: 'POST', sub: /^\/users\/confirm$/, role: 'admin', handle: ({ request, env, member, actor }) => handleBulkConfirmMembers(request, env, member, actor) },
   { method: 'POST', sub: /^\/users\/public-keys$/, role: 'admin', handle: ({ request, env, member }) => handleMemberPublicKeys(request, env, member) },
-  { method: 'DELETE', sub: /^\/users$/, role: 'admin', handle: ({ request, env, member }) => handleBulkDeleteMembers(request, env, member) },
+  { method: 'DELETE', sub: /^\/users$/, role: 'admin', handle: ({ request, env, member, actor }) => handleBulkDeleteMembers(request, env, member, actor) },
   { method: 'POST', sub: new RegExp(`^/users/${ID}/reinvite$`, 'i'), role: 'admin', handle: ({ env, member, params }) => handleReinviteMember(env, member, params[0]) },
-  { method: 'POST', sub: new RegExp(`^/users/${ID}/confirm$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleConfirmMember(request, env, member, params[0]) },
+  { method: 'POST', sub: new RegExp(`^/users/${ID}/confirm$`, 'i'), role: 'admin', handle: ({ request, env, member, params, actor }) => handleConfirmMember(request, env, member, params[0], actor) },
   { method: 'GET', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleGetMember(request, env, member, params[0]) },
-  { method: 'PUT', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleUpdateMember(request, env, member, params[0]) },
-  { method: 'DELETE', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ env, member, params }) => handleDeleteMember(env, member, params[0]) },
+  { method: 'PUT', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, params, actor }) => handleUpdateMember(request, env, member, params[0], actor) },
+  { method: 'DELETE', sub: new RegExp(`^/users/${ID}$`, 'i'), role: 'admin', handle: ({ env, member, params, actor }) => handleDeleteMember(env, member, params[0], actor) },
   { method: 'GET', sub: /^\/collections$/, role: 'admin', handle: ({ env, orgId }) => handleGetOrganizationCollections(env, orgId) },
   { method: 'GET', sub: /^\/collections\/details$/, role: 'admin', handle: ({ env, member, orgId }) => handleGetOrganizationCollectionDetails(env, member, orgId) },
-  { method: 'POST', sub: /^\/collections$/, role: 'admin', handle: ({ request, env, member, orgId }) => handleCreateCollection(request, env, member, orgId) },
-  { method: 'PUT', sub: new RegExp(`^/collections/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, orgId, params }) => handleUpdateCollection(request, env, member, orgId, params[0]) },
-  { method: 'DELETE', sub: new RegExp(`^/collections/${ID}$`, 'i'), role: 'admin', handle: ({ env, orgId, params }) => handleDeleteCollection(env, orgId, params[0]) },
+  { method: 'POST', sub: /^\/collections$/, role: 'admin', handle: ({ request, env, member, orgId, actor }) => handleCreateCollection(request, env, member, orgId, actor) },
+  { method: 'PUT', sub: new RegExp(`^/collections/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, member, orgId, params, actor }) => handleUpdateCollection(request, env, member, orgId, params[0], actor) },
+  { method: 'DELETE', sub: new RegExp(`^/collections/${ID}$`, 'i'), role: 'admin', handle: ({ env, orgId, params, actor }) => handleDeleteCollection(env, orgId, params[0], actor) },
   { method: 'GET', sub: /^\/groups$/, role: 'admin', handle: ({ env, orgId }) => handleListGroups(env, orgId, false) },
   { method: 'GET', sub: /^\/groups\/details$/, role: 'admin', handle: ({ env, orgId }) => handleListGroups(env, orgId, true) },
-  { method: 'POST', sub: /^\/groups$/, role: 'admin', handle: ({ request, env, orgId }) => handleCreateGroup(request, env, orgId) },
-  { method: 'DELETE', sub: /^\/groups$/, role: 'admin', handle: async ({ request, env, orgId }) => handleBulkDeleteGroups(env, orgId, await readGroupIds(request)) },
+  { method: 'POST', sub: /^\/groups$/, role: 'admin', handle: ({ request, env, orgId, actor }) => handleCreateGroup(request, env, orgId, actor) },
+  { method: 'DELETE', sub: /^\/groups$/, role: 'admin', handle: async ({ request, env, orgId, actor }) => handleBulkDeleteGroups(env, orgId, await readGroupIds(request), actor) },
   { method: 'GET', sub: new RegExp(`^/groups/${ID}$`, 'i'), role: 'admin', handle: ({ env, orgId, params }) => handleGetGroup(env, orgId, params[0], false) },
   { method: 'GET', sub: new RegExp(`^/groups/${ID}/details$`, 'i'), role: 'admin', handle: ({ env, orgId, params }) => handleGetGroup(env, orgId, params[0], true) },
   { method: 'GET', sub: new RegExp(`^/groups/${ID}/users$`, 'i'), role: 'admin', handle: ({ env, orgId, params }) => handleGetGroupMembers(env, orgId, params[0]) },
-  { method: 'PUT', sub: new RegExp(`^/groups/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, orgId, params }) => handleUpdateGroup(request, env, orgId, params[0]) },
-  { method: 'DELETE', sub: new RegExp(`^/groups/${ID}$`, 'i'), role: 'admin', handle: ({ env, orgId, params }) => handleDeleteGroup(env, orgId, params[0]) },
+  { method: 'PUT', sub: new RegExp(`^/groups/${ID}$`, 'i'), role: 'admin', handle: ({ request, env, orgId, params, actor }) => handleUpdateGroup(request, env, orgId, params[0], actor) },
+  { method: 'DELETE', sub: new RegExp(`^/groups/${ID}$`, 'i'), role: 'admin', handle: ({ env, orgId, params, actor }) => handleDeleteGroup(env, orgId, params[0], actor) },
   { method: 'GET', sub: new RegExp(`^/users/${ID}/groups$`, 'i'), role: 'admin', handle: ({ env, member, params }) => handleGetMemberGroups(env, member, params[0]) },
-  { method: 'PUT', sub: new RegExp(`^/users/${ID}/groups$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleUpdateMemberGroups(request, env, member, params[0]) },
-  { method: 'POST', sub: new RegExp(`^/users/${ID}/groups$`, 'i'), role: 'admin', handle: ({ request, env, member, params }) => handleUpdateMemberGroups(request, env, member, params[0]) },
+  { method: 'PUT', sub: new RegExp(`^/users/${ID}/groups$`, 'i'), role: 'admin', handle: ({ request, env, member, params, actor }) => handleUpdateMemberGroups(request, env, member, params[0], actor) },
+  { method: 'POST', sub: new RegExp(`^/users/${ID}/groups$`, 'i'), role: 'admin', handle: ({ request, env, member, params, actor }) => handleUpdateMemberGroups(request, env, member, params[0], actor) },
+  { method: 'GET', sub: /^\/events$/, role: 'admin', handle: ({ request, env, orgId }) => handleGetOrganizationEvents(request, env, orgId) },
+  { method: 'GET', sub: new RegExp(`^/users/${ID}/events$`, 'i'), role: 'admin', handle: ({ request, env, orgId, params }) => handleGetMemberEvents(request, env, orgId, params[0]) },
   { method: 'GET', sub: /^\/policies$/, role: 'admin', handle: ({ env, orgId }) => handleListPolicies(env, orgId) },
   { method: 'GET', sub: /^\/policies\/master-password$/, role: 'member', handle: ({ env, orgId }) => handleGetMasterPasswordPolicy(env, orgId) },
   // After master-password; handleGetPolicy and handlePutPolicy refuse a type that is not a supported number.
   { method: 'GET', sub: /^\/policies\/([^/]+)$/, role: 'admin', handle: ({ env, orgId, params }) => handleGetPolicy(env, orgId, params[0]) },
-  { method: 'PUT', sub: /^\/policies\/([^/]+)$/, role: 'admin', handle: ({ request, env, orgId, params }) => handlePutPolicy(request, env, orgId, params[0]) },
+  { method: 'PUT', sub: /^\/policies\/([^/]+)$/, role: 'admin', handle: ({ request, env, orgId, params, actor }) => handlePutPolicy(request, env, orgId, params[0], actor) },
 ];
 
 // Policies an invitee reads before accepting, so any membership that is not revoked may read them.
@@ -146,7 +150,7 @@ export async function handleOrganizationRoute(
     const member = await authorizeOrgRequest(env.DB, orgId, userId, route.role);
     if (member instanceof Response) return member;
     const params = subMatch.slice(1).map((p) => p.toLowerCase());
-    return route.handle({ request, env, userId, member, orgId, params });
+    return route.handle({ request, env, userId, member, orgId, params, actor: eventActor(request, userId) });
   }
   return null;
 }

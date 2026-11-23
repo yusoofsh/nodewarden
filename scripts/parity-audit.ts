@@ -43,7 +43,9 @@ function readRoutes(): Route[] {
     const prefix = rel === 'identity.rs' ? '/identity' : '/api';
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       const m = line.match(/^#\[(get|post|put|delete|patch)\("([^"?]*)/);
-      if (m) routes.push({ file: rel, method: m[1].toUpperCase(), path: prefix + m[2] });
+      // events.rs mounts its client collect route at /events, outside /api.
+      const routePrefix = rel === join('core', 'events.rs') && m?.[2] === '/collect' ? '/events' : prefix;
+      if (m) routes.push({ file: rel, method: m[1].toUpperCase(), path: routePrefix + m[2] });
     }
   }
   return routes;
