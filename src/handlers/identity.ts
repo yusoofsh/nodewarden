@@ -25,6 +25,8 @@ import {
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
+import { ORG_API_SCOPE, ORG_API_TOKEN_TTL_SECONDS, createOrgApiToken } from '../utils/org-api-token';
+import { getOrganizationApiKey } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 
@@ -325,6 +327,55 @@ async function recordFailedTwoFactorAndBuildResponse(
     );
   }
   return identityErrorResponse('Two-step token is invalid. Try again.', 'invalid_grant', 400);
+}
+
+// client_credentials with client_id organization.<id>, after Vaultwarden's organization_api_key_login.
+// The token reaches only POST /api/public/organization/import. As there, no device and no refresh
+// token: the Directory Connector logs in again when it expires. An unknown organization and a wrong
+// secret get the same answer and both count toward the lockout.
+async function organizationApiKeyLogin(
+  request: Request,
+  env: Env,
+  rateLimit: RateLimitService,
+  clientIdentifier: string,
+  clientId: string,
+  clientSecret: string | undefined,
+  scope: string | undefined
+): Promise<Response> {
+  const orgId = clientId.slice('organization.'.length).toLowerCase();
+  if (scope !== ORG_API_SCOPE || !orgId || !clientSecret) {
+    return identityErrorResponse('Parameter error', 'invalid_request', 400);
+  }
+  const loginIdentifier = await loginRateLimitKey(clientIdentifier, 'client_credentials', `organization.${orgId}`);
+  const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
+  if (!loginCheck.allowed) {
+    return identityErrorResponse(
+      `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
+      'TooManyRequests',
+      429
+    );
+  }
+
+  const key = await getOrganizationApiKey(env.DB, orgId);
+  const audit = {
+    category: 'auth' as const,
+    targetType: 'organization',
+    targetId: orgId,
+    metadata: { grantType: 'client_credentials', ...auditRequestMetadata(request) },
+  };
+  if (!key || !(await verifyApiKey(clientSecret, key.apiKey))) {
+    await safeWriteAuditEvent(env, { ...audit, action: 'auth.login.failed.bad_org_api_key', level: 'warn' });
+    return recordFailedLoginAndBuildResponse(rateLimit, loginIdentifier, 'ClientId or clientSecret is incorrect. Try again');
+  }
+
+  await rateLimit.clearLoginAttempts(loginIdentifier);
+  await safeWriteAuditEvent(env, { ...audit, action: 'auth.login.success.org_api_key', level: 'info' });
+  return identityJsonResponse({
+    access_token: await createOrgApiToken(env, orgId, key.revisionDate),
+    expires_in: ORG_API_TOKEN_TTL_SECONDS,
+    token_type: 'Bearer',
+    scope: ORG_API_SCOPE,
+  });
 }
 
 // POST /identity/connect/token
@@ -749,6 +800,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const clientSecret = body.client_secret;
     const scope = body.scope;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
+
+    if (typeof clientId === 'string' && clientId.startsWith('organization.')) {
+      return organizationApiKeyLogin(request, env, rateLimit, clientIdentifier!, clientId, clientSecret, scope);
+    }
 
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);
     if (!parmValid) {

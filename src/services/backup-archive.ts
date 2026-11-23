@@ -663,7 +663,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, name, billing_email, private_key, public_key, created_at, updated_at FROM organizations ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
+    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, external_id, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM organization_groups ORDER BY created_at ASC, id ASC'),

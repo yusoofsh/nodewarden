@@ -42,7 +42,8 @@ export const EventType = {
 
 /** Who caused the events of one request. The device type is read from the devices table on insert. */
 export interface EventActor {
-  userId: string;
+  /** Null when no user acted: the organization API key import. */
+  userId: string | null;
   ip: string | null;
   deviceIdentifier: string | null;
 }
@@ -77,7 +78,9 @@ export interface StoredEvent {
   event_date: string;
 }
 
-export function eventActor(request: Request, userId: string): EventActor {
+export type UserEventActor = EventActor & { userId: string };
+
+export function eventActor(request: Request, userId: string): UserEventActor {
   return {
     userId,
     ip: auditRequestMetadata(request).ip as string | null,

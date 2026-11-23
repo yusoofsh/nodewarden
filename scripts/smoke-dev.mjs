@@ -305,7 +305,32 @@ check('the export lists the collections and the cipher in both', exported.json?.
 check('delete collections in bulk', (await call('DELETE', `${teamPath}/collections`, { token, body: { ids: [extra.json?.id] } })).status === 200);
 const apiKey = await call('POST', `${teamPath}/api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
 check('organization API key', apiKey.json?.object === 'apiKey' && apiKey.json?.apiKey?.length === 30, apiKey.text);
-check('rotate the organization API key', (await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } })).json?.apiKey !== apiKey.json?.apiKey);
+const orgLogin = (secret) => call('POST', '/identity/connect/token', {
+  form: { grant_type: 'client_credentials', client_id: `organization.${teamOrg.json?.id}`, client_secret: secret, scope: 'api.organization' },
+});
+const oldOrgToken = (await orgLogin(apiKey.json?.apiKey)).json?.access_token;
+check('log in with the organization API key', typeof oldOrgToken === 'string', '');
+const rotatedKey = await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
+check('rotate the organization API key', rotatedKey.json?.apiKey !== apiKey.json?.apiKey);
+check('the old organization key no longer logs in', (await orgLogin(apiKey.json?.apiKey)).status === 400);
+check('a token from the old key is refused', (await call('POST', '/api/public/organization/import', { token: oldOrgToken, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
+const orgToken = (await orgLogin(rotatedKey.json?.apiKey)).json?.access_token;
+check('the organization token cannot sync a vault', (await call('GET', '/api/sync', { token: orgToken })).status === 401);
+check('the organization token cannot list members', (await call('GET', `${teamPath}/users`, { token: orgToken })).status === 401);
+check('a user token cannot run the directory import', (await call('POST', '/api/public/organization/import', { token, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
+const directoryImport = await call('POST', '/api/public/organization/import', {
+  token: orgToken,
+  body: {
+    members: [{ email: email2, externalId: `ext-${run}`, deleted: false }, { email: `nobody-${run}@example.test`, externalId: `ext-nobody-${run}`, deleted: false }],
+    groups: [{ name: `Directory ${run}`, externalId: `grp-${run}`, memberExternalIds: [`ext-${run}`] }],
+    overwriteExisting: false,
+    largeImport: false,
+  },
+});
+check('the directory import runs', directoryImport.status === 200, `${directoryImport.status} ${directoryImport.text}`);
+const directoryGroup = (await call('GET', `${teamPath}/groups`, { token })).json?.data?.find((g) => g.externalId === `grp-${run}`);
+check('the import creates the group with the member', directoryGroup && JSON.stringify((await call('GET', `${teamPath}/groups/${directoryGroup.id}/users`, { token })).json) === JSON.stringify([invitedRow?.id]), JSON.stringify(directoryGroup));
+await call('DELETE', `${teamPath}/groups/${directoryGroup?.id}`, { token });
 check('enable account recovery', (await call('PUT', `${teamPath}/policies/8`, { token, body: { policy: { enabled: true, data: { autoEnrollEnabled: false } } } })).status === 200);
 check('auto-enroll status', (await call('GET', `${teamPath}/auto-enroll-status`, { token: secondToken })).json?.resetPasswordEnabled === false);
 const enrolled = await call('PUT', `${teamPath}/users/${(await call('GET', '/api/accounts/profile', { token: secondToken })).json?.id}/reset-password-enrollment`, {

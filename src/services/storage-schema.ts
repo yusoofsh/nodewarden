@@ -177,11 +177,13 @@ const SCHEMA_STATEMENTS: readonly string[] = [
 
   'CREATE TABLE IF NOT EXISTS organization_members (' +
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, akey TEXT NOT NULL DEFAULT \'\', status INTEGER NOT NULL, type INTEGER NOT NULL, ' +
-  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
   'UNIQUE (organization_id, user_id), ' +
   'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members(user_id)',
+  // The directory id POST /api/public/organization/import matches members by.
+  'ALTER TABLE organization_members ADD COLUMN external_id TEXT',
 
   'CREATE TABLE IF NOT EXISTS collections (' +
   'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +

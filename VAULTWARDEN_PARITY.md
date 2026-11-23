@@ -28,7 +28,7 @@ its own `/api/admin/*` and web vault.
 | core/folders.rs | 7 | 0 | 0 | 0 |
 | core/mod.rs | 9 | 0 | 0 | 0 |
 | core/organizations.rs | 68 | 0 | 0 | 1 |
-| core/public.rs | 0 | 0 | 0 | 1 |
+| core/public.rs | 1 | 0 | 0 | 0 |
 | core/sends.rs | 11 | 0 | 0 | 0 |
 | core/two_factor/authenticator.rs | 4 | 0 | 0 | 0 |
 | core/two_factor/duo.rs | 0 | 0 | 0 | 4 |
@@ -39,11 +39,12 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 232, stub 0, refused 18, unmatched 10
+Total 260: handled 233, stub 0, refused 18, unmatched 9
 
 ## Not in the Vaultwarden route list
 
-- **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
+- **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM is licence-gated upstream and Vaultwarden does not ship it.
+- **Directory Connector.** `client_credentials` with `client_id` `organization.<id>` and scope `api.organization` logs in with the organization API key. The token works only on `POST /api/public/organization/import`, and every user route refuses it. Unlike Vaultwarden, rotating the key ends the tokens it issued, the import skips emails that have no account instead of creating one, and an existing account joins as Invited rather than Accepted. As on Bitwarden cloud, more than 2000 groups or members needs `largeImport`.
 - **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete or hibp. They serve official clients only. Organization features need web vault screens too.
 
 ## Unhandled and refused routes
@@ -64,12 +65,6 @@ Total 260: handled 232, stub 0, refused 18, unmatched 10
 <details><summary>core/organizations.rs: unmatched (1)</summary>
 
 - `POST /api/organizations/domain/sso/verified`
-
-</details>
-
-<details><summary>core/public.rs: unmatched (1)</summary>
-
-- `POST /api/public/organization/import`
 
 </details>
 

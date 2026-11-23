@@ -733,7 +733,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('organization_members'),
-      ['id', 'organization_id', 'user_id', 'akey', 'status', 'type', 'access_all', 'reset_password_key', 'created_at', 'updated_at'],
+      ['id', 'organization_id', 'user_id', 'akey', 'status', 'type', 'access_all', 'reset_password_key', 'external_id', 'created_at', 'updated_at'],
       payload.organization_members || []
     )
   );
