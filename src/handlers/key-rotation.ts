@@ -2,6 +2,7 @@ import type { Cipher, Env } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { applyKeyRotation } from '../services/storage-key-rotation-repo';
+import { listKeyedGrantorEmergencyAccess } from '../services/storage-emergency-access-repo';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomingAttachmentMetadata } from './ciphers';
 import { errorResponse } from '../utils/response';
@@ -117,11 +118,28 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     devices.push({ deviceIdentifier: str(item.deviceId), encryptedUserKey, encryptedPublicKey });
   }
 
-  const [existingCiphers, existingFolders, existingSends] = await Promise.all([
+  const [existingCiphers, existingFolders, existingSends, existingEmergencyAccess] = await Promise.all([
     storage.getAllCiphers(userId),
     storage.getAllFolders(userId),
     storage.getAllSends(userId),
+    listKeyedGrantorEmergencyAccess(env.DB, userId),
   ]);
+
+  // Emergency contacts hold the user key wrapped with their public key. Every confirmed
+  // one must be re-wrapped, or the contact would hold a key that no longer exists.
+  const incomingEmergencyKeys = new Map<string, string>();
+  for (const item of asArray(unlockRoot.emergencyAccessUnlockData)) {
+    if (isRecord(item) && str(item.id)) incomingEmergencyKeys.set(str(item.id), str(item.keyEncrypted));
+  }
+  const emergencyAccess: Array<{ id: string; keyEncrypted: string }> = [];
+  for (const access of existingEmergencyAccess) {
+    if (!incomingEmergencyKeys.has(access.id)) {
+      return errorResponse('All existing emergency access keys must be included in the rotation', 400);
+    }
+    const keyEncrypted = incomingEmergencyKeys.get(access.id)!;
+    if (!isWrappedKey(keyEncrypted)) return errorResponse('Emergency access keys cannot be set to null during rotation.', 400);
+    emergencyAccess.push({ id: access.id, keyEncrypted });
+  }
 
   const incomingCiphers = new Map<string, Json>();
   for (const item of asArray(data.ciphers)) {
@@ -203,12 +221,18 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     user: nextUser,
     expectedPasswordVerifier: user.masterPasswordHash,
     expectedSecurityStamp: user.securityStamp,
-    expectedCounts: { ciphers: existingCiphers.length, folders: existingFolders.length, sends: existingSends.length },
+    expectedCounts: {
+      ciphers: existingCiphers.length,
+      folders: existingFolders.length,
+      sends: existingSends.length,
+      emergencyAccess: existingEmergencyAccess.length,
+    },
     newPasswordVerifier: await auth.hashPasswordServer(newHash),
     ciphers,
     attachments,
     folders,
     sends,
+    emergencyAccess,
     passkeys,
     devices,
     now,

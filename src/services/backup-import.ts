@@ -5,6 +5,7 @@ import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
   type BackupManifestAttachmentBlob,
   type BackupPayload,
+  EMERGENCY_ACCESS_COLUMNS,
   isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
@@ -35,7 +36,8 @@ type BackupTableName =
   | 'collection_members'
   | 'folders'
   | 'ciphers'
-  | 'attachments';
+  | 'attachments'
+  | 'emergency_access';
 
 const BACKUP_TABLES: BackupTableName[] = [
   'config',
@@ -50,6 +52,7 @@ const BACKUP_TABLES: BackupTableName[] = [
   'folders',
   'ciphers',
   'attachments',
+  'emergency_access',
 ];
 
 function shadowTableName(table: BackupTableName): string {
@@ -181,6 +184,7 @@ async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
 
 function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[] {
   return [
+    'DELETE FROM emergency_access',
     'DELETE FROM attachments',
     'DELETE FROM ciphers',
     'DELETE FROM folders',
@@ -334,6 +338,7 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
       archived_at: row.archived_at ?? null,
     })),
     attachments: cloneRows(payload.attachments || []),
+    emergency_access: cloneRows(payload.emergency_access || []),
   };
   await importBackupRows(db, preparedDb, true);
   return preparedDb;
@@ -746,6 +751,11 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     tableName('attachments'),
     buildInsertStatements(db, tableName('attachments'), ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], payload.attachments || [])
   );
+  await runInsertBatch(
+    db,
+    tableName('emergency_access'),
+    buildInsertStatements(db, tableName('emergency_access'), EMERGENCY_ACCESS_COLUMNS, payload.emergency_access || [])
+  );
 }
 
 export async function importBackupArchiveBytes(
@@ -799,6 +809,7 @@ export async function importBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -826,6 +837,7 @@ export async function importBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
@@ -948,6 +960,7 @@ export async function importRemoteBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -975,6 +988,7 @@ export async function importRemoteBackupArchiveBytes(
       organization_members: (db.organization_members || []).length,
       collections: (db.collections || []).length,
       collection_members: (db.collection_members || []).length,
+      emergency_access: (db.emergency_access || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,

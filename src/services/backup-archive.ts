@@ -37,6 +37,10 @@ const MAX_BACKUP_ARCHIVE_ENTRY_COUNT = 10_000;
 const MAX_BACKUP_EXTRACTED_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_DB_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
+export const EMERGENCY_ACCESS_COLUMNS = [
+  'id', 'grantor_id', 'grantee_id', 'email', 'key_encrypted', 'type', 'status', 'wait_time_days',
+  'recovery_initiated_at', 'last_notification_at', 'created_at', 'updated_at',
+];
 
 export interface BackupManifest {
   formatVersion: 1;
@@ -77,6 +81,7 @@ export interface BackupPayload {
     organization_members?: SqlRow[];
     collections?: SqlRow[];
     collection_members?: SqlRow[];
+    emergency_access?: SqlRow[];
   };
 }
 
@@ -287,6 +292,7 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     organization_members: source.organization_members as SqlRow[] | undefined,
     collections: source.collections as SqlRow[] | undefined,
     collection_members: source.collection_members as SqlRow[] | undefined,
+    emergency_access: source.emergency_access as SqlRow[] | undefined,
   };
 }
 
@@ -527,6 +533,17 @@ export function validateBackupPayloadContents(
     collectionMemberPairs.add(pair);
   }
 
+  // Optional: archives made before emergency access existed have no such key.
+  const emergencyAccessIds = new Set<string>();
+  for (const row of ensureRowArray(payload.db.emergency_access || [], 'emergency_access')) {
+    const id = String(row.id || '').trim();
+    const granteeId = row.grantee_id == null ? '' : String(row.grantee_id).trim();
+    if (!id || !userIds.has(String(row.grantor_id || '').trim()) || (granteeId && !userIds.has(granteeId))) {
+      throw new Error('Backup archive contains an invalid emergency access row');
+    }
+    if (emergencyAccessIds.has(id)) throw new Error(`Backup archive contains duplicate emergency access id: ${id}`);
+    emergencyAccessIds.add(id);
+  }
 }
 
 export async function buildBackupArchive(
@@ -547,7 +564,7 @@ export async function buildBackupArchive(
   const encoder = new TextEncoder();
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
-    organizationRows, memberRows, collectionRows, collectionMemberRows,
+    organizationRows, memberRows, collectionRows, collectionMemberRows, emergencyAccessRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
@@ -561,6 +578,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
     queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
+    queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
@@ -593,6 +611,7 @@ export async function buildBackupArchive(
       organization_members: memberRows.length,
       collections: collectionRows.length,
       collection_members: collectionMemberRows.length,
+      emergency_access: emergencyAccessRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -620,6 +639,7 @@ export async function buildBackupArchive(
       organization_members: memberRows,
       collections: collectionRows,
       collection_members: collectionMemberRows,
+      emergency_access: emergencyAccessRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 

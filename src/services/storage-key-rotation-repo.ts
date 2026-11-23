@@ -5,12 +5,14 @@ export interface KeyRotationPlan {
   user: User;
   expectedPasswordVerifier: string;
   expectedSecurityStamp: string;
-  expectedCounts: { ciphers: number; folders: number; sends: number };
+  expectedCounts: { ciphers: number; folders: number; sends: number; emergencyAccess: number };
   newPasswordVerifier: string;
   ciphers: Cipher[];
   attachments: Array<{ cipherId: string; id: string; fileName: string | null; key: string | null }>;
   folders: Array<{ id: string; name: string }>;
   sends: Array<{ id: string; key: string }>;
+  // The user key wrapped for each confirmed emergency contact.
+  emergencyAccess: Array<{ id: string; keyEncrypted: string }>;
   // Copies of the user key wrapped for a passkey or a trusted device. Rows that are
   // not listed hold the old user key, so their wrapped keys are cleared.
   passkeys: Array<{ id: string; encryptedUserKey: string; encryptedPublicKey: string | null }>;
@@ -43,7 +45,7 @@ function chunkJson<T>(rows: T[]): string[] {
 // Writes everything a key rotation changes in one D1 batch, which is a single
 // transaction. A batch does not stop when a statement changes no rows, so:
 // - the first statement only applies while the verifier, security stamp and the
-//   number of ciphers, folders and sends are what the request was checked against,
+//   number of ciphers, folders, sends and keyed emergency contacts are what the request was checked against,
 //   so a concurrent password change or a new item makes it a no-op;
 // - every later statement only applies while the user holds the new stamp, a fresh
 //   UUID that only the first statement can set.
@@ -60,13 +62,15 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
         "WHERE id=? AND master_password_hash=? AND security_stamp=? AND status='active' " +
         'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM folders WHERE user_id = ?) = ? ' +
-        'AND (SELECT COUNT(*) FROM sends WHERE user_id = ?) = ?'
+        'AND (SELECT COUNT(*) FROM sends WHERE user_id = ?) = ? ' +
+        'AND (SELECT COUNT(*) FROM emergency_access WHERE grantor_id = ? AND status >= 2 AND key_encrypted IS NOT NULL) = ?'
       )
       .bind(
         plan.newPasswordVerifier, user.key, user.privateKey ?? null, user.publicKey ?? null, user.userKeyId ?? null,
         user.securityStamp, plan.now,
         user.id, plan.expectedPasswordVerifier, plan.expectedSecurityStamp,
-        user.id, plan.expectedCounts.ciphers, user.id, plan.expectedCounts.folders, user.id, plan.expectedCounts.sends
+        user.id, plan.expectedCounts.ciphers, user.id, plan.expectedCounts.folders, user.id, plan.expectedCounts.sends,
+        user.id, plan.expectedCounts.emergencyAccess
       ),
   ];
 
@@ -88,6 +92,17 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
           'UPDATE sends SET key = j.key, updated_at = ? FROM ' +
           "(SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.key') AS key FROM json_each(?)) AS j " +
           'WHERE sends.id = j.id AND sends.user_id = ?' + guard
+        )
+        .bind(plan.now, chunk, user.id, ...guardArgs)
+    );
+  }
+  for (const chunk of chunkJson(plan.emergencyAccess)) {
+    statements.push(
+      db
+        .prepare(
+          'UPDATE emergency_access SET key_encrypted = j.key, updated_at = ? FROM ' +
+          "(SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.keyEncrypted') AS key FROM json_each(?)) AS j " +
+          'WHERE emergency_access.id = j.id AND emergency_access.grantor_id = ?' + guard
         )
         .bind(plan.now, chunk, user.id, ...guardArgs)
     );
