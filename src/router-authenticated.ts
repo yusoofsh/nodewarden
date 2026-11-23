@@ -1,5 +1,6 @@
 import type { Env, User } from './types';
 import { errorResponse, jsonResponse, unsupportedResponse } from './utils/response';
+import { handleMailAuthenticatedRoute } from './handlers/email-auth';
 import {
   handleGetProfile,
   handleUpdateProfile,
@@ -159,6 +160,8 @@ export async function handleAuthenticatedRoute(
     '/accounts/email',
   ]);
   if (mailBackedAccountPaths.has(path) && (method === 'POST' || method === 'PUT')) {
+    const mailResponse = await handleMailAuthenticatedRoute(request, env, currentUser, path, method);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email delivery is not supported by this server.');
   }
 
@@ -173,6 +176,8 @@ export async function handleAuthenticatedRoute(
     '/two-factor/email',
   ]);
   if (emailTwoFactorPaths.has(path) && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
+    const mailResponse = await handleMailAuthenticatedRoute(request, env, currentUser, path, method);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email two-step login is not supported by this server.');
   }
 

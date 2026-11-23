@@ -39,7 +39,7 @@
 | **PWA / offline** | ❌ | ✅ | **Installable, offline** |
 | **Passkey login** | ✅ | ✅ | **passwordless auth** |
 | API keys | ✅ | ✅ | CLI keys; create and rotate |
-| Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey |
+| Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey; email when mail is configured |
 | 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
 | Real-time push sync | ✅ | ✅ | All device sync |
 | Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
@@ -136,6 +136,25 @@ npm run deploy:kv
 npm run dev
 npm run dev:kv
 ```
+
+### Optional: outbound mail
+
+Mail is off by default, and then every email-backed route answers 501 as before. Workers cannot
+use SMTP, so mail goes through an HTTP provider. Set these as Worker variables; put the API key
+and webhook token in **Secrets** (`npx wrangler secret put RESEND_API_KEY`), never in `wrangler.toml`.
+
+| Variable | Meaning |
+|---|---|
+| `MAIL_FROM` | Sender address, such as `Vault <vault@example.com>`. Required. |
+| `RESEND_API_KEY` | Send through [Resend](https://resend.com). Takes precedence over the webhook. |
+| `MAIL_WEBHOOK_URL` | Or POST `{from, to, subject, text, html}` as JSON to this public `https://` URL (no query string; private and loopback hosts are refused). |
+| `MAIL_WEBHOOK_TOKEN` | Optional. Sent to the webhook as `Authorization: Bearer <token>`. |
+
+With mail configured, the server serves email two-step login, email change, account deletion by
+emailed link, verification codes for protected actions, and email verification, and it emails a
+notice for organization and emergency access invites. Registration stays invite-only: a sign-up
+link is only mailed while the server has no users. If mail is turned off later, accounts that use
+email two-step login need their recovery code. See `VAULTWARDEN_PARITY.md` for details.
 
 ---
 

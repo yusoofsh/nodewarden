@@ -22,6 +22,11 @@ export interface Env {
   // Days to keep organization events; 365 when unset, 0 keeps them forever.
   EVENTS_DAYS_RETAIN?: string;
   'globalSettings__yubico__validationUrls'?: string;
+  // Outbound mail (src/services/mail.ts). Off unless MAIL_FROM and one provider are set.
+  MAIL_FROM?: string;
+  RESEND_API_KEY?: string;
+  MAIL_WEBHOOK_URL?: string;
+  MAIL_WEBHOOK_TOKEN?: string;
 }
 
 export type UserRole = 'admin' | 'user';
@@ -67,6 +72,8 @@ export interface User {
   // Client-reported id of the current user key (32 lowercase hex chars); metadata only.
   userKeyId?: string | null;
   avatarColor?: string | null;
+  // Address that email two-step login codes go to; null when that provider is off.
+  emailTwoFactor?: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -20,6 +20,7 @@ import {
   saveUser as saveStoredUser,
   setUserKeyId as setStoredUserKeyId,
   setAvatarColor as setStoredAvatarColor,
+  setEmailTwoFactor as setStoredEmailTwoFactor,
   upgradePasswordVerifier as upgradeStoredPasswordVerifier,
 } from './storage-user-repo';
 import {
@@ -166,8 +167,8 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-export const STORAGE_SCHEMA_VERSION = '2026-11-23-avatar-org-api-key';
-const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays', 'organizations', 'organization_members', 'collections', 'collection_members', 'organization_groups', 'group_members', 'collection_groups', 'organization_policies', 'collection_ciphers', 'emergency_access', 'events'] as const;
+export const STORAGE_SCHEMA_VERSION = '2026-11-23-mail';
+const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays', 'organizations', 'organization_members', 'collections', 'collection_members', 'organization_groups', 'group_members', 'collection_groups', 'organization_policies', 'collection_ciphers', 'emergency_access', 'events', 'email_codes'] as const;
 
 // D1-backed storage.
 // Contract:
@@ -325,6 +326,12 @@ export class StorageService {
 
   async setAvatarColor(userId: string, avatarColor: string | null): Promise<void> {
     await setStoredAvatarColor(this.db, userId, avatarColor);
+  }
+
+  // Sync caches the profile's twoFactorEnabled by revision date, so this bumps it.
+  async setEmailTwoFactor(userId: string, email: string | null): Promise<void> {
+    await setStoredEmailTwoFactor(this.db, userId, email);
+    await this.updateRevisionDate(userId);
   }
 
   async createFirstUser(user: User): Promise<boolean> {

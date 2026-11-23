@@ -27,9 +27,11 @@ import { createPasskeyUserVerificationToken } from '../utils/user-verification-t
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
+import { consumeEmailCode, obscureEmail } from '../services/email-codes';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_REMEMBER = 5;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
@@ -157,7 +159,7 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
+export async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
   const subjectHash = await sha256Hex(`${grantType}:${String(subject || '').trim() || 'unknown'}`);
   return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
 }
@@ -254,6 +256,7 @@ async function twoFactorRequiredResponse(
   let webAuthnOptions: Record<string, unknown> | null = null;
   if (!user || resolveTotpSecret(user.totpSecret)) providers.push(String(TWO_FACTOR_PROVIDER_AUTHENTICATOR));
   if (user && isYubiKeyEnabled(user)) providers.push(String(TWO_FACTOR_PROVIDER_YUBIKEY));
+  if (user?.emailTwoFactor) providers.push(String(TWO_FACTOR_PROVIDER_EMAIL));
   if (user) {
     webAuthnOptions = await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null;
     if (webAuthnOptions) providers.push(String(TWO_FACTOR_PROVIDER_WEBAUTHN));
@@ -262,7 +265,9 @@ async function twoFactorRequiredResponse(
   for (const provider of providers) {
     providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
       ? { Nfc: user?.yubikeyNfc ?? false }
-      : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
+      : provider === String(TWO_FACTOR_PROVIDER_EMAIL) && user?.emailTwoFactor
+        ? { Email: obscureEmail(user.emailTwoFactor) }
+        : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
         ? webAuthnOptions
         : null;
   }
@@ -449,7 +454,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const effectiveWebAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0) {
+    // Email 2FA stays required when mail is later unconfigured; the recovery code still works.
+    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0 || user.emailTwoFactor) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
       const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
       let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
@@ -506,6 +512,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!initializedWithCurrentOtp && !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
+      } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_EMAIL)) {
+        if (!user.emailTwoFactor || !(await consumeEmailCode(env, user.id, 'login', normalizedTwoFactorToken))) {
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {
         if (!effectiveWebAuthnCredentials.length) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
@@ -539,6 +549,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         for (const credential of effectiveWebAuthnCredentials) {
           await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
         }
+        if (user.emailTwoFactor) await storage.setEmailTwoFactor(user.id, null);
         user.totpRecoveryCode = createRecoveryCode();
         user.securityStamp = generateUUID();
         user.updatedAt = new Date().toISOString();

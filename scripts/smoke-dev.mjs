@@ -397,5 +397,19 @@ check('purge the personal vault', (await call('POST', '/api/ciphers/purge', { to
 const purged = await call('GET', '/api/sync', { token: grantorToken });
 check('nothing is left after the purge', purged.json?.ciphers?.length === 0 && purged.json?.folders?.length === 0, purged.text.slice(0, 300));
 
+// Mail is off unless MAIL_FROM and a provider are set (src/services/mail.ts). Unconfigured,
+// every mail-backed route keeps answering 501. Run with SMOKE_MAIL=on against a server that
+// has mail configured to skip these.
+if (process.env.SMOKE_MAIL !== 'on') {
+  for (const path of ['/api/two-factor/get-email', '/api/accounts/email-token', '/api/accounts/verify-email', '/api/accounts/request-otp']) {
+    check(`${path} is refused without mail`, (await call('POST', path, { token: grantorToken, body: { masterPasswordHash: 'hash-4' } })).status === 501);
+  }
+  for (const path of ['/api/two-factor/send-email-login', '/api/accounts/delete-recover', '/identity/accounts/register/send-verification-email']) {
+    check(`${path} is refused without mail`, (await call('POST', path, { body: { email: 'nobody@example.test', masterPasswordHash: 'x' } })).status === 501);
+  }
+  const providers = await call('GET', '/api/two-factor', { token: grantorToken });
+  check('no email provider is listed without mail', !providers.json?.data?.some?.((p) => p.type === 1) && !providers.json?.Data?.some?.((p) => p.Type === 1), providers.text.slice(0, 200));
+}
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

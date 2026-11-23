@@ -8,6 +8,8 @@
 //   nobody could deliver the invite. Vaultwarden instead accepts at once when mail is off,
 //   which joins the invitee without their consent.
 // - Reinvite only checks that the member is still invited: there is nothing to resend.
+// - With mail configured (src/services/mail.ts), inviting also emails each invitee a notice
+//   to log in and accept. A failed send does not undo the invite.
 // - Custom roles are not offered, so a role is Owner, Admin or User. Owners and Admins have
 //   access to every collection; Users get the collections assigned to them and to their groups.
 // - Updating a member without a `groups` list keeps its groups. Vaultwarden clears them.
@@ -22,6 +24,7 @@ import {
   deleteMember,
   getMember,
   getMemberById,
+  getOrganization,
   inviteMembers,
   listCollectionAccess,
   listCollections,
@@ -37,6 +40,7 @@ import { listGroupMembers } from '../services/storage-organization-group-repo';
 import { readMemberGroupIds } from './organization-groups';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { mailConfig, mailTemplates, sendMail } from '../services/mail';
 import { type EventActor, EventType, logEvents } from '../services/events';
 import { accessFlags, isRecord, list, queryFlag, readBody, str, touchUsers } from './organizations';
 
@@ -121,6 +125,12 @@ export async function handleInviteMembers(request: Request, env: Env, caller: Or
     members.flatMap((m) => (parsed.groupIds ?? []).map((groupId) => ({ groupId, memberId: m.id })))
   );
   await logEvents(env, actor, members.map((m) => memberEvent(EventType.OrganizationUserInvited, m)));
+  const mail = mailConfig(env);
+  const organization = mail ? await getOrganization(env.DB, caller.organizationId) : null;
+  if (mail && organization) {
+    const origin = new URL(request.url).origin;
+    for (const email of emails) await sendMail(mail, mailTemplates.organizationInvite(email, organization.name, origin));
+  }
   return ok();
 }
 

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
   api_key TEXT,
   user_key_id TEXT,
   avatar_color TEXT,
+  email_2fa TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -462,3 +463,16 @@ CREATE INDEX IF NOT EXISTS idx_events_cipher_date
   ON events(cipher_id, event_date);
 CREATE INDEX IF NOT EXISTS idx_events_date
   ON events(event_date);
+
+-- Short-lived codes and link tokens sent by email. Runtime state: not exported in backups.
+CREATE TABLE IF NOT EXISTS email_codes (
+  user_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  email TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, purpose),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);

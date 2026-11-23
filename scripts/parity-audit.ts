@@ -3,7 +3,8 @@
 // sample id still counts), a stub when a catch-all answers with an empty list, refused
 // on 405 or 501, and unmatched when no handler claims it.
 //
-// Usage: tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json]
+// Usage: tsx --import ./scripts/offline-workers-loader.mjs scripts/parity-audit.ts <vaultwarden-checkout> [--json] [--mail]
+// --mail configures a mail webhook (outbound fetch is stubbed), so mail-backed routes are measured as served.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -17,6 +18,8 @@ import { createTestDb } from './lib/d1-sqlite';
 const root = process.argv[2];
 if (!root) throw new Error('Pass the path of a Vaultwarden checkout');
 const asJson = process.argv.includes('--json');
+const withMail = process.argv.includes('--mail');
+if (withMail) globalThis.fetch = (async () => new Response('{}', { status: 200 })) as typeof fetch;
 
 const SAMPLE = '11111111-2222-3333-4444-555555555555';
 
@@ -59,7 +62,8 @@ const STUB_PREFIX = /^\/api\/policies(\/|$)/;
 async function main() {
   const db = createTestDb();
   await ensureStorageSchema(db);
-  const env = { DB: db, JWT_SECRET: 'x'.repeat(40) } as unknown as Env;
+  const mail = withMail ? { MAIL_FROM: 'audit@example.test', MAIL_WEBHOOK_URL: 'https://mail.example.test/send' } : {};
+  const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ...mail } as unknown as Env;
   const user = {
     id: SAMPLE, email: 'audit@example.test', name: 'audit', masterPasswordHint: null, masterPasswordHash: 'x', key: '2.a|b|c',
     privateKey: null, publicKey: null, kdfType: 0, kdfIterations: 600000, securityStamp: 's', role: 'admin', status: 'active',

@@ -77,6 +77,7 @@ export async function resetUserCredentials(
     for (const credential of await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor')) {
       await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
     }
+    if (user.emailTwoFactor) await storage.setEmailTwoFactor(user.id, null);
   }
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);

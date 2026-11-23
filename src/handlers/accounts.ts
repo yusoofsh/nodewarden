@@ -20,6 +20,7 @@ import {
 } from '../services/yubico-config';
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const TOTP_USER_VERIFICATION_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -117,7 +118,7 @@ async function hmacSha256(secret: string, data: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)));
 }
 
-async function createTotpUserVerificationToken(env: Env, user: User, key: string): Promise<string> {
+export async function createTotpUserVerificationToken(env: Env, user: User, key: string): Promise<string> {
   const payload = {
     sub: user.id,
     key,
@@ -129,7 +130,7 @@ async function createTotpUserVerificationToken(env: Env, user: User, key: string
   return `${payloadB64}.${signatureB64}`;
 }
 
-async function verifyTotpUserVerificationToken(env: Env, user: User, key: string, token: string): Promise<boolean> {
+export async function verifyTotpUserVerificationToken(env: Env, user: User, key: string, token: string): Promise<boolean> {
   try {
     const [payloadB64, signatureB64] = String(token || '').split('.');
     if (!payloadB64 || !signatureB64) return false;
@@ -1025,6 +1026,7 @@ export async function handleGetTwoFactorProviders(request: Request, env: Env, us
 
   const data = [];
   if (isTotpEnabled(user.totpSecret)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_AUTHENTICATOR, true));
+  if (user.emailTwoFactor) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_EMAIL, true));
   if (isYubiKeyEnabled(user)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_YUBIKEY, true));
   const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
   if (webAuthnCredentials.length > 0) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_WEBAUTHN, true));
@@ -1371,7 +1373,8 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
   const typeRaw = body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
   const type = typeof typeRaw === 'number' ? typeRaw : Number.parseInt(String(typeRaw), 10);
-  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
+  // Email is accepted with mail off too, so an account can always turn it off.
+  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_EMAIL, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
@@ -1381,6 +1384,8 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
     user.totpSecret = null;
+  } else if (type === TWO_FACTOR_PROVIDER_EMAIL) {
+    await storage.setEmailTwoFactor(user.id, null);
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
     user.yubikeyKey1 = null;
     user.yubikeyKey2 = null;
@@ -1402,7 +1407,9 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     actorUserId: user.id,
     action: type === TWO_FACTOR_PROVIDER_AUTHENTICATOR
       ? 'account.totp.disable'
-      : type === TWO_FACTOR_PROVIDER_YUBIKEY
+      : type === TWO_FACTOR_PROVIDER_EMAIL
+        ? 'account.email_2fa.disable'
+        : type === TWO_FACTOR_PROVIDER_YUBIKEY
         ? 'account.yubikey.disable'
         : 'account.webauthn_2fa.disable',
     category: 'security',
@@ -1616,6 +1623,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   for (const credential of webAuthnCredentials) {
     await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
   }
+  if (user.emailTwoFactor) await storage.setEmailTwoFactor(user.id, null);
   user.totpRecoveryCode = createRecoveryCode();
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();

@@ -14,7 +14,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, master_password_hint TEXT, master_password_hash TEXT NOT NULL, ' +
   'key TEXT NOT NULL, private_key TEXT, public_key TEXT, kdf_type INTEGER NOT NULL, ' +
   'kdf_iterations INTEGER NOT NULL, kdf_memory INTEGER, kdf_parallelism INTEGER, ' +
-  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 0, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, api_key TEXT, user_key_id TEXT, avatar_color TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 0, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, api_key TEXT, user_key_id TEXT, avatar_color TEXT, email_2fa TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'ALTER TABLE users ADD COLUMN master_password_hint TEXT',
   'ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT \'user\'',
   'ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'',
@@ -30,6 +30,8 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'ALTER TABLE users ADD COLUMN api_key TEXT',
   'ALTER TABLE users ADD COLUMN user_key_id TEXT',
   'ALTER TABLE users ADD COLUMN avatar_color TEXT',
+  // The address email two-step login codes go to; null when that provider is off.
+  'ALTER TABLE users ADD COLUMN email_2fa TEXT',
 
   'CREATE TABLE IF NOT EXISTS domain_settings (' +
   'user_id TEXT PRIMARY KEY, equivalent_domains TEXT NOT NULL DEFAULT \'[]\', custom_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', excluded_global_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', updated_at TEXT NOT NULL, ' +
@@ -262,6 +264,13 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_events_organization_date ON events(organization_id, event_date)',
   'CREATE INDEX IF NOT EXISTS idx_events_cipher_date ON events(cipher_id, event_date)',
   'CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date)',
+
+  // Short-lived codes and link tokens sent by email, one per user and purpose. Only an HMAC of
+  // the code is kept. Runtime state: not exported in backups.
+  'CREATE TABLE IF NOT EXISTS email_codes (' +
+  'user_id TEXT NOT NULL, purpose TEXT NOT NULL, email TEXT NOT NULL, code_hash TEXT NOT NULL, ' +
+  'attempts INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, ' +
+  'PRIMARY KEY (user_id, purpose), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
 ];
 
 async function executeSchemaStatement(db: D1Database, statement: string): Promise<void> {

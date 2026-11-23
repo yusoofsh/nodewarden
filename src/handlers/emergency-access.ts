@@ -20,6 +20,7 @@ import { readNewMasterPassword, resetUserCredentials } from './master-password-r
 import { handleGetAttachment } from './attachments';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import { mailConfig, mailTemplates, sendMail } from '../services/mail';
 import { policyJson } from '../utils/organization-response';
 import { MemberStatus } from '../services/storage-organization-repo';
 import { listPoliciesForUser } from '../services/storage-organization-policy-repo';
@@ -31,6 +32,8 @@ import { listPoliciesForUser } from '../services/storage-organization-policy-rep
 // - So rows are never left invited, and /accept and /reinvite only act on an invited
 //   row whose email is the caller's own (rows restored from elsewhere).
 // - A row the caller is not part of, or holds in the other role, is a 404.
+// - With mail configured, the grantee also gets an email saying they were added. The
+//   invite still accepts at once; a failed send does not undo it.
 
 const NOT_VALID = 'Emergency access not valid.';
 const notFound = () => errorResponse(NOT_VALID, 404);
@@ -253,6 +256,11 @@ async function invite(request: Request, env: Env, user: User, now: string): Prom
     updatedAt: now,
   });
   if (!inserted) return errorResponse(`Grantee user already invited: ${grantee.email}`, 400);
+  const mail = mailConfig(env);
+  if (mail) {
+    const grantor = user.name ? `${user.name} (${user.email})` : user.email;
+    await sendMail(mail, mailTemplates.emergencyAccessInvite(grantee.email, grantor, new URL(request.url).origin));
+  }
   return new Response(null, { status: 200 });
 }
 

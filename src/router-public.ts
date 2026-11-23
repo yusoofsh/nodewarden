@@ -33,6 +33,7 @@ import {
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
+import { handleMailPublicRoute } from './handlers/email-auth';
 import { StorageService } from './services/storage';
 import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins } from './utils/origins';
@@ -465,6 +466,8 @@ export async function handlePublicRoute(
   if (publicMailBackedPaths.has(path) && method === 'POST') {
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
     if (blocked) return blocked;
+    const mailResponse = await handleMailPublicRoute(request, env, path);
+    if (mailResponse) return mailResponse;
     return unsupportedResponse('Email delivery is not supported by this server.');
   }
 
