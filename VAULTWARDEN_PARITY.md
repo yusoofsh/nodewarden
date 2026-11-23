@@ -23,7 +23,7 @@ its own `/api/admin/*` and web vault.
 |---|---|---|---|---|
 | core/accounts.rs | 32 | 0 | 5 | 6 |
 | core/ciphers.rs | 32 | 0 | 0 | 27 |
-| core/emergency_access.rs | 0 | 0 | 0 | 19 |
+| core/emergency_access.rs | 19 | 0 | 0 | 0 |
 | core/events.rs | 0 | 2 | 0 | 2 |
 | core/folders.rs | 5 | 0 | 0 | 2 |
 | core/mod.rs | 8 | 0 | 0 | 1 |
@@ -39,12 +39,12 @@ its own `/api/admin/*` and web vault.
 | core/two_factor/yubikey.rs | 4 | 0 | 0 | 0 |
 | identity.rs | 3 | 0 | 3 | 4 |
 
-Total 260: handled 106, stub 30, refused 15, unmatched 109
+Total 260: handled 125, stub 30, refused 15, unmatched 90
 
 ## Not in the Vaultwarden route list
 
 - **SSO.** Vaultwarden implements OIDC login (`sso_auth.rs`, `/identity/connect/authorize`, `/sso/prevalidate`). The unmatched `identity.rs` rows include it. It is a target after organizations, not an exclusion. Bitwarden's own SCIM and Directory Connector sync are licence-gated upstream and Vaultwarden does not ship them.
-- **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete or hibp. They serve official clients only. Organization features need web vault screens too.
+- **Who calls the routes.** Nothing in this repo's `webapp/` calls KDF change, key rotation, security-stamp, self-delete, hibp or emergency access. They serve official clients only. Organization features need web vault screens too.
 
 ## Unhandled and refused routes
 
@@ -97,30 +97,6 @@ Total 260: handled 106, stub 30, refused 15, unmatched 109
 - `PUT /api/ciphers/delete-admin`
 - `PUT /api/ciphers/restore-admin`
 - `PUT /api/ciphers/share`
-
-</details>
-
-<details><summary>core/emergency_access.rs: unmatched (19)</summary>
-
-- `DELETE /api/emergency-access/<emer_id>`
-- `GET /api/emergency-access/<emer_id>`
-- `GET /api/emergency-access/<emer_id>/<cipher_id>/attachment/<attachment_id>`
-- `GET /api/emergency-access/<emer_id>/policies`
-- `GET /api/emergency-access/granted`
-- `GET /api/emergency-access/trusted`
-- `POST /api/emergency-access/<emer_id>`
-- `POST /api/emergency-access/<emer_id>/accept`
-- `POST /api/emergency-access/<emer_id>/approve`
-- `POST /api/emergency-access/<emer_id>/confirm`
-- `POST /api/emergency-access/<emer_id>/delete`
-- `POST /api/emergency-access/<emer_id>/initiate`
-- `POST /api/emergency-access/<emer_id>/password`
-- `POST /api/emergency-access/<emer_id>/reinvite`
-- `POST /api/emergency-access/<emer_id>/reject`
-- `POST /api/emergency-access/<emer_id>/takeover`
-- `POST /api/emergency-access/<emer_id>/view`
-- `POST /api/emergency-access/invite`
-- `PUT /api/emergency-access/<emer_id>`
 
 </details>
 
@@ -293,7 +269,7 @@ Total 260: handled 106, stub 30, refused 15, unmatched 109
 ## Order of work
 
 1. Organizations, as vertical slices that each ship with a web vault screen: create an organization and see it in sync, then collections, members, sharing an item to a collection, groups and policies. Cipher access goes through one access function covered by a role by collection by route test, before anything is parallelized.
-2. Emergency access, which needs user public keys (done) and email.
+2. Emergency access (done, without email: invites go to existing accounts and are accepted at once, as in Vaultwarden with mail off).
 3. Email-backed routes (verify email, delete-recover, email two-factor, new-device OTP), which need an outbound mail provider chosen by the operator.
 4. Duo, which needs a Duo account to test.
 5. SSO.
