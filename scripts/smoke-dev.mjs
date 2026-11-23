@@ -178,6 +178,29 @@ const secondOrg = await call('POST', '/api/organizations', {
 const blocked = await call('POST', '/api/accounts/delete', { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
 check('the last owner of an organization cannot delete their account', blocked.status === 400 && /organization/.test(blocked.json?.error || ''), `${blocked.status} ${blocked.text}`);
 check('the other account cannot see that organization', (await call('GET', `/api/organizations/${secondOrg.json?.id}`, { token })).status === 404);
+
+// Members: invite the second account, accept from its session, confirm, change its role, remove it.
+const teamOrg = await call('POST', '/api/organizations', {
+  token, body: { name: 'Team org', billingEmail: email, collectionName: enc('default'), key: '4.b3JnLWtleQ==' },
+});
+const teamPath = `/api/organizations/${teamOrg.json?.id}`;
+check('unknown email cannot be invited', (await call('POST', `${teamPath}/users/invite`, { token, body: { emails: [`nobody-${run}@example.test`], type: 2 } })).status === 400);
+const inviteMember = await call('POST', `${teamPath}/users/invite`, { token, body: { emails: [email2], type: 2, collections: [], groups: [] } });
+check('invite an existing account', inviteMember.status === 200, `${inviteMember.status} ${inviteMember.text}`);
+const invitedRow = (await call('GET', `${teamPath}/users`, { token })).json?.data?.find((m) => m.email === email2.toLowerCase());
+check('the invitee is listed as invited', invitedRow?.status === 0, JSON.stringify(invitedRow));
+check('the owner cannot accept for the invitee', (await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token, body: { token: 'x' } })).status === 404);
+const accepted = await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token: secondToken, body: { token: 'x' } });
+check('the invitee accepts', accepted.status === 200, `${accepted.status} ${accepted.text}`);
+const memberKeys = await call('POST', `${teamPath}/users/public-keys`, { token, body: { ids: [invitedRow?.id] } });
+check('invitee public key', memberKeys.json?.data?.[0]?.id === invitedRow?.id, memberKeys.text);
+const confirmed = await call('POST', `${teamPath}/users/${invitedRow?.id}/confirm`, { token, body: { key: '4.d3JhcHBlZA==' } });
+check('confirm the member', confirmed.status === 200, `${confirmed.status} ${confirmed.text}`);
+const memberSync = await call('GET', '/api/sync', { token: secondToken });
+check('the member syncs the organization', memberSync.json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id && o.status === 2), memberSync.text.slice(0, 300));
+check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
+check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
+await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });
 await call('DELETE', `/api/organizations/${secondOrg.json?.id}`, { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
 const deleted = await call('POST', '/api/accounts/delete', { token: second.json?.access_token, body: { masterPasswordHash: 'hash-x' } });
 check('delete own account', deleted.status === 200, `${deleted.status} ${deleted.text}`);

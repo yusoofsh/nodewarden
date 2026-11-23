@@ -238,6 +238,12 @@ export async function listOrganizationsSolelyOwnedBy(db: D1Database, userId: str
   return (results || []).map((row) => row.organization_id);
 }
 
+function insertAccess(db: D1Database, a: CollectionAccess): D1PreparedStatement {
+  return db
+    .prepare('INSERT INTO collection_members(collection_id, member_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?)')
+    .bind(a.collectionId, a.memberId, a.readOnly ? 1 : 0, a.hidePasswords ? 1 : 0, a.manage ? 1 : 0);
+}
+
 function insertCollection(db: D1Database, collection: Collection): D1PreparedStatement {
   return db
     .prepare('INSERT INTO collections(id, organization_id, name, external_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)')
@@ -317,15 +323,70 @@ export async function saveCollection(
           .prepare('UPDATE collections SET name = ?, external_id = ?, updated_at = ? WHERE id = ? AND organization_id = ?')
           .bind(collection.name, collection.externalId, collection.updatedAt, collection.id, collection.organizationId),
     db.prepare('DELETE FROM collection_members WHERE collection_id = ?').bind(collection.id),
-    ...access.map((a) =>
-      db
-        .prepare('INSERT INTO collection_members(collection_id, member_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?)')
-        .bind(collection.id, a.memberId, a.readOnly ? 1 : 0, a.hidePasswords ? 1 : 0, a.manage ? 1 : 0)
-    ),
+    ...access.map((a) => insertAccess(db, a)),
   ];
   await db.batch(statements);
 }
 
 export async function deleteCollection(db: D1Database, organizationId: string, id: string): Promise<void> {
   await db.prepare('DELETE FROM collections WHERE id = ? AND organization_id = ?').bind(id, organizationId).run();
+}
+
+export async function getMemberById(db: D1Database, organizationId: string, memberId: string): Promise<OrganizationMember | null> {
+  const row = await db
+    .prepare(`SELECT ${MEMBER_COLUMNS} FROM organization_members m WHERE m.organization_id = ? AND m.id = ?`)
+    .bind(organizationId, memberId)
+    .first<any>();
+  return row ? mapMember(row) : null;
+}
+
+/** Inserts invited members and their collection access, in one transaction. */
+export async function inviteMembers(db: D1Database, members: OrganizationMember[], access: CollectionAccess[]): Promise<void> {
+  await db.batch([
+    ...members.map((m) =>
+      db
+        .prepare(
+          'INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at) ' +
+          'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .bind(m.id, m.organizationId, m.userId, m.akey, m.status, m.type, m.accessAll ? 1 : 0, m.resetPasswordKey, m.createdAt, m.updatedAt)
+    ),
+    ...access.map((a) => insertAccess(db, a)),
+  ]);
+}
+
+/**
+ * Moves a member from status `from` to `to`, setting akey when given. Returns false when the member
+ * was not in `from`, so a repeated or out-of-order request changes nothing.
+ */
+export async function transitionMember(
+  db: D1Database,
+  organizationId: string,
+  memberId: string,
+  from: number,
+  to: number,
+  akey: string | null = null
+): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE organization_members SET status = ?, akey = COALESCE(?, akey), updated_at = ? WHERE id = ? AND organization_id = ? AND status = ?')
+    .bind(to, akey, new Date().toISOString(), memberId, organizationId, from)
+    .run();
+  return Number(result.meta?.changes || 0) > 0;
+}
+
+/** Sets a member's role and replaces its collection access, in one transaction. */
+export async function updateMemberAccess(
+  db: D1Database,
+  member: OrganizationMember,
+  type: number,
+  accessAll: boolean,
+  access: CollectionAccess[]
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare('UPDATE organization_members SET type = ?, access_all = ?, updated_at = ? WHERE id = ? AND organization_id = ?')
+      .bind(type, accessAll ? 1 : 0, new Date().toISOString(), member.id, member.organizationId),
+    db.prepare('DELETE FROM collection_members WHERE member_id = ?').bind(member.id),
+    ...access.map((a) => insertAccess(db, a)),
+  ]);
 }
