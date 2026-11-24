@@ -178,7 +178,8 @@ export function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDat
   const existingTs = Date.parse(existingUpdatedAt);
   const clientTs = Date.parse(clientRevisionDate);
   if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
-  return existingTs > clientTs;
+  // Official clients drop the milliseconds of the revision date they echo back.
+  return Math.floor(existingTs / 1000) > Math.floor(clientTs / 1000);
 }
 
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
