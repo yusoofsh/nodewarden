@@ -60,7 +60,7 @@ async function setup() {
   verifier ??= await createPasswordVerifier(PASSWORD);
   const db = createTestDb();
   await ensureStorageSchema(db);
-  const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ATTACHMENTS_KV: { delete: async () => undefined } } as unknown as Env;
+  const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ATTACHMENTS: { delete: async () => undefined } } as unknown as Env;
   const storage = new StorageService(db);
   for (const actor of ACTORS) await storage.createUser(makeUser(actor));
   await db

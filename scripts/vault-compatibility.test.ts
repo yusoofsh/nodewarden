@@ -61,7 +61,7 @@ async function fixture(ctx: TestContext) {
   const notifications: any[] = [];
   const env: any = {
     DB: db,
-    ATTACHMENTS_KV: { delete: async (key: string) => { deletedBlobs.push(key); } },
+    ATTACHMENTS: { delete: async (key: string) => { deletedBlobs.push(key); } },
     NOTIFICATIONS_HUB: {
       idFromName: (name: string) => name,
       get: () => ({ fetch: async (_url: string, init: RequestInit) => { notifications.push(JSON.parse(init.body as string)); return new Response(null, { status: 204 }); } }),

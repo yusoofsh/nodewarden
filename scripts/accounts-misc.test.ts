@@ -11,7 +11,7 @@ import { handlePublicRoute } from '../src/router-public';
 import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes } from '../src/services/backup-import';
 import { createTestDb } from './lib/d1-sqlite';
-import { createFakeKv } from './lib/fake-kv';
+import { createFakeBucket } from './lib/fake-r2';
 
 // /api/sync caches responses in caches.default, keyed by the user's revision date.
 const cacheStore = new Map<string, Response>();
@@ -45,8 +45,8 @@ async function setup() {
   verifier ??= await createPasswordVerifier(PASSWORD);
   const db = createTestDb();
   await ensureStorageSchema(db);
-  const bucket = createFakeKv();
-  const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ATTACHMENTS_KV: bucket } as unknown as Env;
+  const bucket = createFakeBucket();
+  const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ATTACHMENTS: bucket } as unknown as Env;
   const storage = new StorageService(db);
   for (const actor of ACTORS) await storage.createUser(makeUser(actor));
   return { db, env, storage, bucket };

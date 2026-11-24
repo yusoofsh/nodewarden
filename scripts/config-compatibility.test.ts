@@ -12,15 +12,17 @@ test('config enables the official Bitwarden desktop settings dialog', () => {
   assert.equal(body.object, 'config');
 });
 
-test('wrangler.toml is the single config and binds KV attachment storage', () => {
+test('wrangler.toml is the single config and binds the attachments R2 bucket', () => {
   const config = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 
-  assert.match(config, /^\[\[kv_namespaces\]\]\n\s*binding = "ATTACHMENTS_KV"$/m);
-  assert.doesNotMatch(config, /^\[\[r2_buckets\]\]/m);
+  assert.match(
+    config,
+    /^\[\[r2_buckets\]\]\nbinding = "ATTACHMENTS"\nbucket_name = "nodewarden-attachments"$/m
+  );
+  assert.doesNotMatch(config, /^\[\[kv_namespaces\]\]/m);
 
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.match(pkg.scripts.deploy, /scripts\/ensure-kv\.cjs/);
-  assert.ok(pkg.scripts['migrate:kv']);
+  assert.match(pkg.scripts.deploy, /scripts\/ensure-r2\.cjs/);
 
   assert.throws(
     () => readFileSync(new URL('../wrangler.kv.toml', import.meta.url), 'utf8'),

@@ -39,7 +39,7 @@ Security reports are welcome for issues affecting NodeWarden itself, including:
 * Import, export, backup, and restore.
 * Passkey, WebAuthn, and two-factor authentication.
 * Secret handling and provider credentials.
-* Cloudflare Workers, D1, R2, KV, WebDAV, or S3 behavior caused by NodeWarden code or documentation.
+* Cloudflare Workers, D1, R2, WebDAV, or S3 behavior caused by NodeWarden code or documentation.
 
 ## Out of Scope
 

@@ -42,7 +42,7 @@
 | 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
 | 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
 | 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
-| 附件 / Send| ✅ | ✅ | Cloudflare KV |
+| 附件 / Send| ✅ | ✅ | Cloudflare R2 |
 | 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
 | **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
 | 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
@@ -71,7 +71,7 @@
 2. 进入 [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. 选择 Continue with GitHub 并选择你的仓库
 4. 构建命令填 `npm run build`，部署命令填 `npm run deploy`
-- `npm run deploy` 会自动创建附件存储所用的 KV 命名空间，无需绑卡或额外配置
+- `npm run deploy` 会在需要时创建 `nodewarden-attachments` R2 储存桶；R2 需要账户绑定支付卡
 5. 等部署完成后，打开生成的 Workers 域名
 
 - Workers 默认域名在部分网络环境不可直连。如需自定义域名，到 [Workers 设置](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings)里添加。
@@ -84,10 +84,10 @@
 
 
 > [!TIP] 
-> 附件与 Send 文件存放在 Cloudflare KV：
+> 附件与 Send 文件存放在 `nodewarden-attachments` R2 储存桶：
 >   | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
 >   |---|---|---|
->   | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
+>   | 需要 | 100 MB（软限制可更改） | 10 GB |
 
 
 ## 常见问题：
@@ -95,8 +95,8 @@
   这通常与 GitHub Fork 仓库的识别或 Cloudflare 对仓库的授权/同步有关。如果 Fork 后仓库名称、描述等信息与上游项目高度一致，可能更容易触发相关限制或异常。建议在 Fork 时就将仓库名称修改为与上游不同的名称，并同时修改仓库描述，例如改为 `2233warden`。如果已经完成 Fork，也可以直接在 GitHub 仓库设置中修改名称和描述，然后重新尝试在 Cloudflare 中连接。
 
 - **我删掉部署后重新部署，为什么注册又开始要求邀请码了？**  
-  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库和 KV 命名空间中的用户、邀请码及相关配置仍然存在，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
-  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 KV 命名空间**。
+  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库中的用户、邀请码及相关配置仍然存在，附件文件也还在 R2 储存桶里，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
+  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 R2 储存桶**。
 
 - **我配置了 `JWT_SECRET`，为什么页面仍然提示缺少？**  
   请将 `JWT_SECRET` 配置在 Cloudflare Workers 的 **Settings → Variables and Secrets** 中，并确保它属于 **Runtime variables and secrets**，而不是 **Build variables**。  
@@ -123,26 +123,12 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# 默认使用 KV 储存，部署脚本会自动创建命名空间
+# 部署脚本会在储存桶缺失时自动创建
 npm run deploy
 
-# 本地开发（本地 KV 与 D1）
+# 本地开发（本地 R2 与 D1）
 npm run dev
 ```
-
-### 从 R2 迁移附件
-
-在 KV 成为唯一附件储存之前建立的部署，附件与 Send 文件仍留在 `nodewarden-attachments` R2 储存桶里。部署本版本前请先把它们复制到 KV 命名空间；部署后 Worker 不再读取 R2 文件。
-
-```powershell
-# 先预览要复制的内容
-npm run migrate:kv -- --dry-run
-
-# 执行复制（可重复运行；只读 R2、写入 KV）
-npm run migrate:kv
-```
-
-储存桶名称不同可加 `--bucket <名称>`，只想处理某个前缀可加 `--prefix takes/`。超过 KV 25 MiB 上限的对象会列出并跳过，KV 上线后请在客户端重新上传。脚本需要具备 R2 读取和 KV 写入权限的 `CLOUDFLARE_API_TOKEN`，或先 `wrangler login`。脚本不删除 R2 中的对象，确认无误后即可从 `wrangler.toml` 移除 R2 绑定。
 
 ---
 

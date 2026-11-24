@@ -18,7 +18,6 @@ import {
   deleteBlobObject,
   getAttachmentObjectKey,
   getBlobObject,
-  getBlobStorageMaxBytes,
   putBlobObject,
 } from '../services/blob-store';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
@@ -150,7 +149,7 @@ async function processAttachmentUpload(
   cipherId: string
 ): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.attachment.maxFileSizeBytes);
+  const maxFileSize = LIMITS.attachment.maxFileSizeBytes;
   const upload = await parseDirectUploadPayload(request, {
     expectedSize: Number(attachment.size) || 0,
     maxFileSize,
@@ -174,11 +173,7 @@ async function processAttachmentUpload(
         attachmentId: attachment.id,
       },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('KV object too large')) {
-      return errorResponse(`File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`, 413);
-    }
+  } catch {
     return errorResponse('Attachment storage is not configured', 500);
   }
 
@@ -276,7 +271,7 @@ export async function handleLegacyUploadAttachment(
   const replaced = replaceAttachmentId ? await loadAttachment(storage, replaceAttachmentId, cipherId) : null;
   if (replaceAttachmentId && !replaced) return errorResponse('Attachment not found', 404);
 
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.attachment.maxFileSizeBytes);
+  const maxFileSize = LIMITS.attachment.maxFileSizeBytes;
   const tooLarge = `File too large. Maximum size is ${Math.floor(maxFileSize / (1024 * 1024))}MB`;
   if (!(request.headers.get('content-type') || '').includes('multipart/form-data')) {
     return errorResponse('Expected a multipart/form-data upload', 400);
@@ -311,9 +306,7 @@ export async function handleLegacyUploadAttachment(
       contentType: file.type || 'application/octet-stream',
       customMetadata: { cipherId, attachmentId: attachment.id },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('KV object too large')) return errorResponse(tooLarge, 413);
+  } catch {
     return errorResponse('Attachment storage is not configured', 500);
   }
   await storage.saveAttachment(attachment);

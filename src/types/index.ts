@@ -8,8 +8,8 @@ export interface Env {
   };
   // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
   HIDE_WEB_VAULT?: string;
-  // KV namespace for attachment/send-file storage.
-  ATTACHMENTS_KV?: KVNamespace;
+  // R2 bucket for attachment/send-file storage.
+  ATTACHMENTS?: R2Bucket;
   JWT_SECRET: string;
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
