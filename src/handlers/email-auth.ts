@@ -374,6 +374,8 @@ async function registerFinish(request: Request, env: Env): Promise<Response> {
     kdfMemory: pick(body.kdfMemory, kdf.memory, kdf.kdfMemory),
     kdfParallelism: pick(body.kdfParallelism, kdf.parallelism, kdf.kdfParallelism),
     keys: pick(body.userAsymmetricKeys, body.keys),
+    accountKeys: body.accountKeys,
+    userKeyId: unlock.containedKeyId,
     masterPasswordHint: body.masterPasswordHint,
     inviteCode: body.inviteCode,
   };

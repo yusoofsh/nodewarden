@@ -133,6 +133,10 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   }
 
   const sendResponses = sends.map(sendToResponse);
+  // Left by a V1 to V2 upgrade: sessions still holding the V1 user key unwrap the V2 one with it.
+  const upgradeToken = parseUpgradeToken(user.v2UpgradeToken);
+  const userDecryption = buildUserDecryptionCompat(user) as SyncResponse['userDecryption'] & Record<string, unknown>;
+  if (upgradeToken) userDecryption.v2UpgradeToken = upgradeToken;
   const syncResponse: SyncResponse = {
     profile,
     folders: folderResponses,
@@ -156,12 +160,14 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
       KeyConnectorOption: null,
       WebAuthnPrfOption: webAuthnPrfOptions[0] || null,
       WebAuthnPrfOptions: webAuthnPrfOptions,
-      V2UpgradeToken: null,
+      V2UpgradeToken: upgradeToken
+        ? { WrappedUserKey1: upgradeToken.wrappedUserKey1, WrappedUserKey2: upgradeToken.wrappedUserKey2 }
+        : null,
       UserKeyId: user.userKeyId ?? null,
       Object: 'userDecryption',
     },
     UserDecryptionOptions: userDecryptionOptions,
-    userDecryption: buildUserDecryptionCompat(user) as SyncResponse['userDecryption'],
+    userDecryption,
     object: 'sync',
   };
 
@@ -174,4 +180,14 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   });
   await writeSyncCache(cacheRequest, response);
   return response;
+}
+
+function parseUpgradeToken(value: string | null | undefined): { wrappedUserKey1: string; wrappedUserKey2: string } | null {
+  if (!value) return null;
+  try {
+    const token = JSON.parse(value);
+    return typeof token?.wrappedUserKey1 === 'string' && typeof token?.wrappedUserKey2 === 'string' ? token : null;
+  } catch {
+    return null;
+  }
 }

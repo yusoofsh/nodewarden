@@ -8,6 +8,7 @@ import {
   EMERGENCY_ACCESS_COLUMNS,
   EVENT_COLUMNS,
   SSO_USER_COLUMNS,
+  USER_SIGNATURE_KEY_PAIR_COLUMNS,
   isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
@@ -46,7 +47,8 @@ type BackupTableName =
   | 'attachments'
   | 'emergency_access'
   | 'events'
-  | 'sso_users';
+  | 'sso_users'
+  | 'user_signature_key_pairs';
 
 const BACKUP_TABLES: BackupTableName[] = [
   'config',
@@ -69,6 +71,7 @@ const BACKUP_TABLES: BackupTableName[] = [
   'emergency_access',
   'events',
   'sso_users',
+  'user_signature_key_pairs',
 ];
 
 function shadowTableName(table: BackupTableName): string {
@@ -200,6 +203,7 @@ async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
 
 function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[] {
   return [
+    'DELETE FROM user_signature_key_pairs',
     'DELETE FROM sso_users',
     'DELETE FROM events',
     'DELETE FROM emergency_access',
@@ -345,6 +349,10 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
       verify_devices: row.verify_devices ?? 0,
       yubikey_nfc: row.yubikey_nfc ?? 0,
       duo_config: row.duo_config ?? null,
+      signed_public_key: row.signed_public_key ?? null,
+      security_state: row.security_state ?? null,
+      security_version: row.security_version ?? null,
+      v2_upgrade_token: row.v2_upgrade_token ?? null,
     })),
     domain_settings: cloneRows(payload.domain_settings || []),
     user_revisions: cloneRows(payload.user_revisions || []),
@@ -371,6 +379,7 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     emergency_access: cloneRows(payload.emergency_access || []),
     events: cloneRows(payload.events || []),
     sso_users: cloneRows(payload.sso_users || []),
+    user_signature_key_pairs: cloneRows(payload.user_signature_key_pairs || []),
   };
   await importBackupRows(db, preparedDb, true);
   return preparedDb;
@@ -693,7 +702,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('users'),
-      ['id', 'email', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'duo_config', 'avatar_color', 'email_2fa', 'created_at', 'updated_at'],
+      ['id', 'email', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'duo_config', 'avatar_color', 'email_2fa', 'signed_public_key', 'security_state', 'security_version', 'v2_upgrade_token', 'created_at', 'updated_at'],
       payload.users || []
     )
   );
@@ -739,7 +748,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('organization_members'),
-      ['id', 'organization_id', 'user_id', 'akey', 'status', 'type', 'access_all', 'reset_password_key', 'external_id', 'created_at', 'updated_at'],
+      ['id', 'organization_id', 'user_id', 'akey', 'status', 'type', 'access_all', 'reset_password_key', 'external_id', 'v2_upgrade_token', 'created_at', 'updated_at'],
       payload.organization_members || []
     )
   );
@@ -803,6 +812,11 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
   );
   await runInsertBatch(db, tableName('events'), buildInsertStatements(db, tableName('events'), EVENT_COLUMNS, payload.events || []));
   await runInsertBatch(db, tableName('sso_users'), buildInsertStatements(db, tableName('sso_users'), SSO_USER_COLUMNS, payload.sso_users || []));
+  await runInsertBatch(
+    db,
+    tableName('user_signature_key_pairs'),
+    buildInsertStatements(db, tableName('user_signature_key_pairs'), USER_SIGNATURE_KEY_PAIR_COLUMNS, payload.user_signature_key_pairs || [])
+  );
 }
 
 export async function importBackupArchiveBytes(
@@ -864,6 +878,7 @@ export async function importBackupArchiveBytes(
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
+      user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -899,6 +914,7 @@ export async function importBackupArchiveBytes(
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
+      user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
@@ -1029,6 +1045,7 @@ export async function importRemoteBackupArchiveBytes(
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
+      user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
@@ -1064,6 +1081,7 @@ export async function importRemoteBackupArchiveBytes(
       emergency_access: (db.emergency_access || []).length,
       events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
+      user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,

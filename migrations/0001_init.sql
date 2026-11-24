@@ -39,8 +39,23 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_color TEXT,
   email_2fa TEXT,
   duo_config TEXT,
+  -- V2 account keys; all null for a V1 account. The signature key pair is in user_signature_key_pairs.
+  signed_public_key TEXT,
+  security_state TEXT,
+  security_version INTEGER,
+  v2_upgrade_token TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_signature_key_pairs (
+  user_id TEXT PRIMARY KEY,
+  signature_algorithm INTEGER NOT NULL,
+  signing_key TEXT NOT NULL,
+  verifying_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS domain_settings (
@@ -312,6 +327,7 @@ CREATE TABLE IF NOT EXISTS organization_members (
   access_all INTEGER NOT NULL DEFAULT 0,
   reset_password_key TEXT,
   external_id TEXT,
+  v2_upgrade_token TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (organization_id, user_id),

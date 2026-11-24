@@ -5,6 +5,7 @@ import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-eve
 import { jsonResponse, errorResponse } from '../utils/response';
 import { isLastActiveAdmin, LAST_ORGANIZATION_OWNER_ERROR, purgeUser } from '../services/user-deletion';
 import { generateUUID } from '../utils/uuid';
+import { isV2User } from '../utils/account-keys';
 
 const HIBP_USERNAME_PATTERN = /^[^\s/?#]{1,254}$/;
 
@@ -44,15 +45,23 @@ export async function handleRotateSecurityStamp(request: Request, env: Env, user
   return new Response(null, { status: 200 });
 }
 
-// GET /api/users/{id}/public-key
-// Used by clients to wrap keys for another account (sharing, emergency access).
-export async function handleGetUserPublicKey(env: Env, targetUserId: string): Promise<Response> {
+// GET /api/users/{id}/public-key, GET /api/users/{id}/keys
+// Used by clients to wrap keys for another account (sharing, emergency access). Like Vaultwarden,
+// /keys answers with the signed public key and verifying key too, set only for a V2 account.
+export async function handleGetUserPublicKey(env: Env, targetUserId: string, withSignature = false): Promise<Response> {
   const storage = new StorageService(env.DB);
   const target = await storage.getUserById(targetUserId);
   if (!target || target.status !== 'active' || !target.publicKey) {
     return errorResponse('User not found', 404);
   }
-  return jsonResponse({ userId: target.id, publicKey: target.publicKey, object: 'userKey' });
+  if (!withSignature) return jsonResponse({ userId: target.id, publicKey: target.publicKey, object: 'userKey' });
+  const keyPair = isV2User(target) ? target.signatureKeyPair : null;
+  return jsonResponse({
+    publicKey: target.publicKey,
+    signedPublicKey: keyPair ? target.signedPublicKey : null,
+    verifyingKey: keyPair ? keyPair.verifyingKey : null,
+    object: 'publicKeys',
+  });
 }
 
 // GET /api/tasks

@@ -1,4 +1,4 @@
-import type { Cipher, User } from '../types';
+import type { Cipher, User, UserSignatureKeyPair } from '../types';
 import { cipherRowValues } from './storage-cipher-repo';
 
 export interface KeyRotationPlan {
@@ -14,7 +14,10 @@ export interface KeyRotationPlan {
   // The user key wrapped for each confirmed emergency contact.
   emergencyAccess: Array<{ id: string; keyEncrypted: string }>;
   // The user key wrapped for each organization the user enrolled in account recovery, by membership id.
-  accountRecovery: Array<{ id: string; key: string }>;
+  // A null key keeps the stored one (a V1 to V2 upgrade); each row's v2_upgrade_token becomes user.v2UpgradeToken.
+  accountRecovery: Array<{ id: string; key: string | null }>;
+  // The V2 signature key pair to store, or null for a V1 rotation.
+  signatureKeyPair: UserSignatureKeyPair | null;
   // Copies of the user key wrapped for a passkey or a trusted device. Rows that are
   // not listed hold the old user key, so their wrapped keys are cleared.
   passkeys: Array<{ id: string; encryptedUserKey: string; encryptedPublicKey: string | null }>;
@@ -60,7 +63,8 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        'UPDATE users SET master_password_hash=?, key=?, private_key=?, public_key=?, user_key_id=?, security_stamp=?, updated_at=? ' +
+        'UPDATE users SET master_password_hash=?, key=?, private_key=?, public_key=?, user_key_id=?, security_stamp=?, ' +
+        'signed_public_key=?, security_state=?, security_version=?, v2_upgrade_token=?, updated_at=? ' +
         "WHERE id=? AND master_password_hash=? AND security_stamp=? AND status='active' " +
         // Organization ciphers are encrypted with the organization key, so a rotation leaves them alone.
         'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ? AND organization_id IS NULL) = ? ' +
@@ -70,7 +74,8 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
       )
       .bind(
         plan.newPasswordVerifier, user.key, user.privateKey ?? null, user.publicKey ?? null, user.userKeyId ?? null,
-        user.securityStamp, plan.now,
+        user.securityStamp, user.signedPublicKey ?? null, user.securityState ?? null, user.securityVersion ?? null,
+        user.v2UpgradeToken ?? null, plan.now,
         user.id, plan.expectedPasswordVerifier, plan.expectedSecurityStamp,
         user.id, plan.expectedCounts.ciphers, user.id, plan.expectedCounts.folders, user.id, plan.expectedCounts.sends,
         user.id, plan.expectedCounts.emergencyAccess
@@ -113,8 +118,24 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
   for (const membership of plan.accountRecovery) {
     statements.push(
       db
-        .prepare('UPDATE organization_members SET reset_password_key = ?, updated_at = ? WHERE id = ? AND user_id = ?' + guard)
-        .bind(membership.key, plan.now, membership.id, user.id, ...guardArgs)
+        .prepare(
+          'UPDATE organization_members SET reset_password_key = COALESCE(?, reset_password_key), v2_upgrade_token = ?, updated_at = ? ' +
+          'WHERE id = ? AND user_id = ?' + guard
+        )
+        .bind(membership.key, user.v2UpgradeToken ?? null, plan.now, membership.id, user.id, ...guardArgs)
+    );
+  }
+  if (plan.signatureKeyPair) {
+    const pair = plan.signatureKeyPair;
+    statements.push(
+      db
+        .prepare(
+          'INSERT INTO user_signature_key_pairs(user_id, signature_algorithm, signing_key, verifying_key, created_at, updated_at) ' +
+          'SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?) ' +
+          'ON CONFLICT(user_id) DO UPDATE SET signature_algorithm = excluded.signature_algorithm, signing_key = excluded.signing_key, ' +
+          'verifying_key = excluded.verifying_key, updated_at = excluded.updated_at'
+        )
+        .bind(user.id, pair.algorithm, pair.signingKey, pair.verifyingKey, plan.now, plan.now, ...guardArgs)
     );
   }
   for (const chunk of chunkJson(plan.ciphers.map(cipherRowValues))) {

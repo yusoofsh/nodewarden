@@ -200,9 +200,8 @@ test('key rotation data lists keyed emergency contacts and recovery-enrolled org
   ]);
 });
 
-test('rotate-user-keys and mail-backed account routes are refused with 501', async () => {
+test('mail-backed account routes are refused with 501', async () => {
   const c = await setup();
-  assert.equal((await call(c, 'owner', 'POST', '/api/accounts/key-management/rotate-user-keys', {})).status, 501);
   assert.equal((await call(c, 'owner', 'POST', '/api/accounts/email', { newEmail: 'x@example.test' })).status, 501);
   assert.equal((await callPublic(c, 'POST', '/api/accounts/delete-recover', { email: 'owner@example.test' })).status, 501);
   assert.equal((await callPublic(c, 'POST', '/api/accounts/delete-recover-token', {})).status, 501);

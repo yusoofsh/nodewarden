@@ -1,4 +1,4 @@
-import type { Cipher, Env } from '../types';
+import type { Cipher, Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { applyKeyRotation } from '../services/storage-key-rotation-repo';
@@ -9,6 +9,14 @@ import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomin
 import { errorResponse, jsonResponse } from '../utils/response';
 import { listMembershipsByUser, MemberStatus, REVOKED_ENROLLABLE_STATUSES } from '../services/storage-organization-repo';
 import { generateUUID } from '../utils/uuid';
+import {
+  applyAccountKeys,
+  encStringType,
+  isV2User,
+  validateAccountKeys,
+  validateWrappedAccountCryptographicState,
+  type ValidatedAccountKeys,
+} from '../utils/account-keys';
 
 type Json = Record<string, unknown>;
 
@@ -22,11 +30,9 @@ const isWrappedKey = (value: string): boolean => /^\d+\.[^|\s]+$/.test(value);
 
 // POST /api/accounts/key-management/rotate-user-account-keys
 //
-// Re-keys an account with a v1 (AES-CBC-HMAC) user key: new master-key-wrapped user key,
-// new auth hash, the private key re-wrapped, and every cipher, folder and send
-// re-encrypted by the client. All of it is written in one transaction, including the
-// wrapped copies of the user key held for passkeys and trusted devices. Accounts with a
-// signature key pair or security state (v2) are refused rather than half rotated.
+// Re-keys an account and changes its master password: new master-key-wrapped user key,
+// new auth hash, the account keys re-wrapped, and every cipher, folder and send
+// re-encrypted by the client. V1 and V2 account keys are both accepted; see rotateAccount.
 export async function handleRotateUserAccountKeys(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
@@ -49,20 +55,11 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
 
   const unlockRoot = isRecord(body.accountUnlockData) ? body.accountUnlockData : {};
   const unlock = isRecord(unlockRoot.masterPasswordUnlockData) ? unlockRoot.masterPasswordUnlockData : null;
-  const keys = isRecord(body.accountKeys) ? body.accountKeys : null;
   const data = isRecord(body.accountData) ? body.accountData : null;
-  if (!unlock || !keys || !data) return errorResponse('accountUnlockData, accountKeys and accountData are required', 400);
+  if (!unlock || !isRecord(body.accountKeys) || !data) return errorResponse('accountUnlockData, accountKeys and accountData are required', 400);
 
   // Key rotation changes keys, never the KDF or the salt.
-  const kdfType = num(unlock.kdfType ?? unlock.kdf);
-  const iterations = num(unlock.kdfIterations ?? unlock.iterations);
-  const memory = num(unlock.kdfMemory ?? unlock.memory);
-  const parallelism = num(unlock.kdfParallelism ?? unlock.parallelism);
-  if (
-    kdfType !== user.kdfType ||
-    iterations !== user.kdfIterations ||
-    (user.kdfType === 1 && (memory !== user.kdfMemory || parallelism !== user.kdfParallelism))
-  ) {
+  if (!kdfUnchanged(user, unlock)) {
     return errorResponse('The provided master password unlock data is not valid for this user.', 400);
   }
   const salt = (str(unlock.masterPasswordSalt) || str(unlock.email)).toLowerCase();
@@ -76,26 +73,182 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
     return errorResponse('New master key authentication hash and encrypted user key are required', 400);
   }
 
-  if (keys.signatureKeyPair != null || keys.securityState != null) {
-    return errorResponse('Rotating accounts with V2 encryption keys is not supported by this server.', 400);
+  const keys = validateAccountKeys(body.accountKeys);
+  if (typeof keys === 'string') return errorResponse(keys, 400);
+  // Like upstream, this endpoint ends every session, so an upgrade token is never kept.
+  const upgradeToken = readUpgradeToken(unlockRoot.v2UpgradeToken);
+  if (upgradeToken instanceof Error) return errorResponse(upgradeToken.message, 400);
+
+  return rotateAccount(request, env, user, {
+    keys,
+    unlockRoot,
+    data,
+    oldUserKeyId: str(body.oldUserKeyId),
+    newUserKeyId: str(body.newUserKeyId),
+    wrappedUserKey: newUserKey,
+    newPasswordHash: newHash,
+    upgradeToken: null,
+  });
+}
+
+// POST /api/accounts/key-management/rotate-user-keys
+//
+// Rotates the keys of a V2 account, or upgrades a V1 account to V2, without changing the
+// master password. As upstream, the session is the only proof; the unlock method must be
+// the master password, whose KDF and salt stay as they are.
+export async function handleRotateUserKeys(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
   }
-  const privateKey = str(keys.userKeyEncryptedAccountPrivateKey);
-  const publicKey = str(keys.accountPublicKey);
-  if (!isValidEncString(privateKey) || !privateKey.startsWith('2.') || !publicKey) {
-    return errorResponse('The provided account private key was not wrapped with AES-256-CBC-HMAC', 400);
-  }
-  if (user.publicKey && user.publicKey !== publicKey) {
-    return errorResponse('Changing the asymmetric keypair is not possible during key rotation', 400);
+  if (!isRecord(body)) return errorResponse('Invalid JSON', 400);
+  const unlockRoot = body.unlockData;
+  const data = body.accountData;
+  const method = body.unlockMethodData;
+  if (!isRecord(unlockRoot) || !isRecord(data) || !isRecord(method)) {
+    return errorResponse('wrappedAccountCryptographicState, unlockData, accountData and unlockMethodData are required', 400);
   }
 
-  const oldUserKeyId = str(body.oldUserKeyId);
+  switch (num(method.unlockMethod)) {
+    case 1:
+      break;
+    case 0:
+      return errorResponse('Trusted device encryption is not supported', 400);
+    case 2:
+      return errorResponse('Key connector is not supported', 400);
+    default:
+      return errorResponse('Unrecognized unlock method', 400);
+  }
+  const unlock = method.masterPasswordUnlockData;
+  if (!isRecord(unlock) || method.keyConnectorKeyWrappedUserKey != null) {
+    return errorResponse(
+      'Invalid MasterPassword unlock method request, MasterPasswordUnlockData must be provided and KeyConnectorKeyWrappedUserKey must be null',
+      400
+    );
+  }
+  const wrappedUserKey = str(unlock.masterKeyWrappedUserKey ?? unlock.key);
+  if (!wrappedUserKey) return errorResponse('The MasterKeyWrappedUserKey field is required.', 400);
+  if (!isValidEncString(wrappedUserKey)) return errorResponse('MasterKeyWrappedUserKey is not a valid encrypted string', 400);
+  const salt = typeof unlock.salt === 'string' ? unlock.salt : '';
+  if (!salt.trim()) return errorResponse('The Salt field is required.', 400);
+  if (salt.length > 256) return errorResponse('The field Salt must be a string with a maximum length of 256.', 400);
+  if (!user.masterPasswordHash || !user.key) {
+    return errorResponse('User is in an invalid state for master password key rotation.', 400);
+  }
+  if (salt !== user.email.trim().toLowerCase()) return errorResponse('Invalid master password salt.', 400);
+  if (!kdfUnchanged(user, isRecord(unlock.kdf) ? unlock.kdf : {})) return errorResponse('Invalid KDF settings.', 400);
   const newUserKeyId = str(body.newUserKeyId);
+  if (str(unlock.containedKeyId) !== newUserKeyId) {
+    return errorResponse('Invalid user key sent in master-password unlock data.', 400);
+  }
+
+  const keys = validateWrappedAccountCryptographicState(body.wrappedAccountCryptographicState);
+  if (typeof keys === 'string') return errorResponse(keys, 400);
+  const upgradeToken = readUpgradeToken(unlockRoot.v2UpgradeToken);
+  if (upgradeToken instanceof Error) return errorResponse(upgradeToken.message, 400);
+
+  return rotateAccount(request, env, user, {
+    keys,
+    unlockRoot,
+    data,
+    oldUserKeyId: str(body.oldUserKeyId),
+    newUserKeyId,
+    wrappedUserKey,
+    newPasswordHash: null,
+    upgradeToken,
+  });
+}
+
+interface RotationInput {
+  keys: ValidatedAccountKeys;
+  // emergencyAccessUnlockData, organizationAccountRecoveryUnlockData, passkeyUnlockData, deviceKeyUnlockData
+  unlockRoot: Json;
+  // ciphers, folders, sends
+  data: Json;
+  oldUserKeyId: string;
+  newUserKeyId: string;
+  // The new user key, wrapped by the master key.
+  wrappedUserKey: string;
+  // The client's new master password hash; null keeps the password.
+  newPasswordHash: string | null;
+  // JSON of the client's v2UpgradeToken, honored only while the account is still V1.
+  upgradeToken: string | null;
+}
+
+function kdfUnchanged(user: User, kdf: Json): boolean {
+  const kdfType = num(kdf.kdfType ?? kdf.kdf);
+  const iterations = num(kdf.kdfIterations ?? kdf.iterations);
+  const memory = num(kdf.kdfMemory ?? kdf.memory);
+  const parallelism = num(kdf.kdfParallelism ?? kdf.parallelism);
+  return (
+    kdfType === user.kdfType &&
+    iterations === user.kdfIterations &&
+    (user.kdfType !== 1 || (memory === user.kdfMemory && parallelism === user.kdfParallelism))
+  );
+}
+
+/** The upgrade token as stored (JSON), null when absent, or why it is invalid. */
+function readUpgradeToken(value: unknown): string | null | Error {
+  if (value == null) return null;
+  if (!isRecord(value) || !str(value.wrappedUserKey1)) return new Error('The WrappedUserKey1 field is required.');
+  if (!str(value.wrappedUserKey2)) return new Error('The WrappedUserKey2 field is required.');
+  return JSON.stringify({ wrappedUserKey1: str(value.wrappedUserKey1), wrappedUserKey2: str(value.wrappedUserKey2) });
+}
+
+/**
+ * The rotation checks on the new keys, as Vaultwarden's validate_rotation_account_keys: the public
+ * key never changes, a V2 account never goes back to V1 and keeps its verifying key, and V2 keys are
+ * wrapped by a COSE (type 7) user key.
+ */
+function rotationKeysError(keys: ValidatedAccountKeys, user: User): string | null {
+  if (user.publicKey && user.publicKey !== keys.publicKey) {
+    return 'Changing the asymmetric keypair is not possible during key rotation';
+  }
+  if (!keys.v2) {
+    if (isV2User(user)) return 'Cannot downgrade an account from v2 to v1 encryption during key rotation';
+    if (!isValidEncString(keys.privateKey) || encStringType(keys.privateKey) !== '2') {
+      return 'The provided account private key was not wrapped with AES-256-CBC-HMAC';
+    }
+    return null;
+  }
+  // Both a V2 rotation and the V1 to V2 upgrade end with a COSE user key wrapping the private keys.
+  if (encStringType(keys.v2.signingKey) !== '7') return 'The provided signing key data is not wrapped with XChaCha20-Poly1305.';
+  if (encStringType(keys.privateKey) !== '7') return 'The provided private key encryption key is not wrapped with XChaCha20-Poly1305.';
+  // The V1 to V2 upgrade is where the signature key pair comes from.
+  if (!isV2User(user)) return null;
+  if (!user.signatureKeyPair) return 'The account is missing its signature key pair';
+  if (user.signatureKeyPair.verifyingKey !== keys.v2.verifyingKey) {
+    return 'Changing the verifying key is not possible during key rotation';
+  }
+  return null;
+}
+
+// Both rotation endpoints. All of it is written in one transaction, including the wrapped copies
+// of the user key held for passkeys and trusted devices, and the V2 key pair. Every session ends.
+async function rotateAccount(request: Request, env: Env, user: User, input: RotationInput): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const { keys, unlockRoot, data, oldUserKeyId, newUserKeyId } = input;
+  const userId = user.id;
+
   if (oldUserKeyId && user.userKeyId && oldUserKeyId !== user.userKeyId) {
     return errorResponse('The user key being rotated is not the current user key. Sync and try again.', 409);
   }
   if (newUserKeyId && !USER_KEY_ID.test(newUserKeyId)) {
     return errorResponse('newUserKeyId must be a 32-character lowercase hex string', 400);
   }
+  const keysError = rotationKeysError(keys, user);
+  if (keysError) return errorResponse(keysError, 400);
+
+  // An upgrade from V1 can't re-wrap the account recovery keys without the member trusting the
+  // organization's key, so they are kept and get the token an admin re-wraps them from.
+  const isUpgrade = input.upgradeToken !== null && !isV2User(user);
+  const upgradeToken = isUpgrade ? input.upgradeToken : null;
 
   // Copies of the user key wrapped for passkeys and trusted devices. Clients send the
   // ones they can re-wrap. Any row left out has its wrapped key cleared, never kept.
@@ -150,12 +303,17 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
   for (const item of asArray(unlockRoot.organizationAccountRecoveryUnlockData)) {
     if (isRecord(item) && str(item.organizationId)) incomingRecoveryKeys.set(str(item.organizationId).toLowerCase(), str(item.resetPasswordKey));
   }
-  const accountRecovery: Array<{ id: string; key: string }> = [];
+  const accountRecovery: Array<{ id: string; key: string | null }> = [];
   for (const membership of existingAccountRecovery) {
     if (!incomingRecoveryKeys.has(membership.organizationId)) {
       return errorResponse('All existing reset password keys must be included in the rotation', 400);
     }
     const key = incomingRecoveryKeys.get(membership.organizationId)!;
+    if (isUpgrade) {
+      if (key) return errorResponse('Account recovery keys cannot be rotated during a V1 to V2 upgrade rotation.', 400);
+      accountRecovery.push({ id: membership.id, key: null });
+      continue;
+    }
     if (!isWrappedKey(key)) return errorResponse('Account recovery keys cannot be null or empty during rotation.', 400);
     accountRecovery.push({ id: membership.id, key });
   }
@@ -228,14 +386,15 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
   }
 
   const now = new Date().toISOString();
-  const nextUser = {
+  const nextUser: User = {
     ...user,
-    key: newUserKey,
-    privateKey,
-    publicKey: user.publicKey || publicKey,
+    key: input.wrappedUserKey,
     securityStamp: generateUUID(),
     userKeyId: newUserKeyId || user.userKeyId,
+    v2UpgradeToken: upgradeToken,
   };
+  applyAccountKeys(nextUser, keys);
+  nextUser.publicKey = user.publicKey || keys.publicKey;
   const applied = await applyKeyRotation(env.DB, {
     user: nextUser,
     expectedPasswordVerifier: user.masterPasswordHash,
@@ -246,13 +405,16 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
       sends: existingSends.length,
       emergencyAccess: existingEmergencyAccess.length,
     },
-    newPasswordVerifier: await auth.hashPasswordServer(newHash),
+    newPasswordVerifier: input.newPasswordHash === null
+      ? user.masterPasswordHash
+      : await new AuthService(env).hashPasswordServer(input.newPasswordHash),
     ciphers,
     attachments,
     folders,
     sends,
     emergencyAccess,
     accountRecovery,
+    signatureKeyPair: nextUser.signatureKeyPair ?? null,
     passkeys,
     devices,
     now,
@@ -264,12 +426,18 @@ export async function handleRotateUserAccountKeys(request: Request, env: Env, us
 
   await safeWriteAuditEvent(env, {
     actorUserId: user.id,
-    action: 'account.keys.rotate',
+    action: isUpgrade ? 'account.keys.upgrade_v2' : 'account.keys.rotate',
     category: 'security',
     level: 'security',
     targetType: 'user',
     targetId: user.id,
-    metadata: { ciphers: ciphers.length, folders: folders.length, sends: sends.length, ...auditRequestMetadata(request) },
+    metadata: {
+      ciphers: ciphers.length,
+      folders: folders.length,
+      sends: sends.length,
+      v2: !!keys.v2,
+      ...auditRequestMetadata(request),
+    },
   });
   return new Response(null, { status: 200 });
 }

@@ -295,5 +295,7 @@ export function isSerializedEncString(value: unknown): value is string {
   if (type === 2) return bodyParts.length === 3 && bodyParts.every(Boolean);
   if (type === 3 || type === 4) return bodyParts.length === 1 && !!bodyParts[0];
   if (type === 5 || type === 6) return bodyParts.length === 2 && bodyParts.every(Boolean);
+  // COSE Encrypt0, what a V2 user key encrypts with.
+  if (type === 7) return bodyParts.length === 1 && !!bodyParts[0];
   return false;
 }

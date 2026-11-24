@@ -89,7 +89,7 @@ import {
   handleDeleteAttachment,
   handleLegacyUploadAttachment,
 } from './handlers/attachments';
-import { handleGetKeyRotationData, handleRotateUserAccountKeys } from './handlers/key-rotation';
+import { handleGetKeyRotationData, handleRotateUserAccountKeys, handleRotateUserKeys } from './handlers/key-rotation';
 import { handleEmergencyAccessRoute } from './handlers/emergency-access';
 import {
   handleDeleteOwnAccount,
@@ -302,19 +302,18 @@ export async function handleAuthenticatedRoute(
     return handleGetKeyRotationData(env, userId);
   }
 
-  // Vaultwarden accepts only V2 account keys (signature key pair and security state) here,
-  // and this server stores V1 keys only, so the rotation above is the one it offers.
+  // V2 account keys only: rotates a V2 account, or upgrades a V1 one, keeping the master password.
   if (path === '/api/accounts/key-management/rotate-user-keys' && method === 'POST') {
-    return unsupportedResponse('Rotating V2 encryption keys is not supported by this server.');
+    return handleRotateUserKeys(request, env, userId);
   }
 
   if (path === '/api/accounts/security-stamp' && method === 'POST') {
     return handleRotateSecurityStamp(request, env, userId);
   }
 
-  const userPublicKeyMatch = path.match(/^\/api\/users\/([a-f0-9-]+)\/(?:public-key|keys)$/i);
+  const userPublicKeyMatch = path.match(/^\/api\/users\/([a-f0-9-]+)\/(public-key|keys)$/i);
   if (userPublicKeyMatch && method === 'GET') {
-    return handleGetUserPublicKey(env, userPublicKeyMatch[1].toLowerCase());
+    return handleGetUserPublicKey(env, userPublicKeyMatch[1].toLowerCase(), userPublicKeyMatch[2].toLowerCase() === 'keys');
   }
 
   if (path === '/api/tasks' && method === 'GET') {

@@ -16,6 +16,7 @@ import {
   assertAccountPasskey,
   unlockVaultKeyWithAccountPasskeyPrf,
 } from '@/lib/account-passkeys';
+import { isV2AccountKeys } from '@/lib/account-keys-v2';
 import { readInviteCodeFromUrl } from '@/lib/app-support';
 import { t, translateServerError } from '@/lib/i18n';
 import {
@@ -302,6 +303,10 @@ function decodeAccessTokenClaims(accessToken: string): AccessTokenClaims {
   }
 }
 
+function assertV1Account(accountKeys: unknown): void {
+  if (isV2AccountKeys(accountKeys)) throw new Error(t('txt_v2_account_unsupported'));
+}
+
 function buildTransientProfile(token: TokenSuccess, email: string, fallbackProfile: Profile | null = null): Profile {
   const claims = decodeAccessTokenClaims(token.access_token);
   const normalizedEmail = String(claims.email || email || '').trim().toLowerCase();
@@ -481,6 +486,7 @@ export async function completeLogin(
     () => {}
   );
   const profile = buildTransientProfile(token, normalizedEmail, fallbackProfile);
+  assertV1Account(profile.accountKeys);
   if (!profile.key) {
     throw new Error('Missing profile key');
   }
@@ -525,6 +531,7 @@ async function completeLoginWithVaultKeys(
     () => {}
   );
   const profile = buildTransientProfile(token, normalizedEmail, fallbackProfile);
+  assertV1Account(profile.accountKeys);
   saveOfflineUnlockRecord({
     email: normalizedEmail,
     profile,

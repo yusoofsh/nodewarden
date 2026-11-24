@@ -957,6 +957,7 @@ const en: Record<string, string> = {
   "txt_passkey_verification_failed": "Passkey verification failed",
   "txt_passkey_cannot_unlock_vault": "This passkey cannot unlock this vault",
   "txt_invalid_passkey_vault_key": "Invalid passkey vault key",
+  "txt_v2_account_unsupported": "This account uses V2 encryption, which the web vault does not support yet. Use an official Bitwarden client.",
   "txt_phone": "Phone",
   "txt_please_input_email_and_password": "Please input email and password",
   "txt_please_input_master_password": "Please input master password",
