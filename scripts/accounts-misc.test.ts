@@ -243,6 +243,32 @@ test('two-factor webauthn/all removes every WebAuthn key after the master passwo
   assert.equal((await call(c, 'owner', 'DELETE', '/api/two-factor/webauthn/all', { masterPasswordHash: PASSWORD })).status, 400);
 });
 
+test('two-factor webauthn delete removes the last key and turns the provider off', async () => {
+  const c = await setup();
+  const credential = (n: number, purpose: 'twoFactor' | 'login'): AccountPasskeyCredential => ({
+    id: `cred-${purpose}-${n}`, userId: ID.owner, purpose, name: `key ${n}`, publicKey: 'pk', credentialId: `cid-${purpose}-${n}`,
+    counter: 0, type: 'public-key', aaGuid: null, transports: null, encryptedUserKey: null, encryptedPublicKey: null,
+    encryptedPrivateKey: null, supportsPrf: false, createdAt: '2026-01-02', updatedAt: '2026-01-02',
+  });
+  await c.storage.saveAccountPasskeyCredential(credential(1, 'twoFactor'));
+  await c.storage.saveAccountPasskeyCredential(credential(1, 'login'));
+  await c.storage.saveRefreshToken('owner-token', ID.owner, Date.now() + 60_000, 'dev-1');
+
+  const wrong = await call(c, 'owner', 'DELETE', '/api/two-factor/webauthn', { id: 1, masterPasswordHash: 'wrong' });
+  assert.equal(wrong.status, 400);
+  assert.equal((await c.storage.getAccountPasskeyCredentialsByUserId(ID.owner, 'twoFactor')).length, 1);
+
+  const stillOne = await call(c, 'owner', 'DELETE', '/api/two-factor/webauthn', { id: 1, masterPasswordHash: PASSWORD });
+  assert.equal(stillOne.status, 200, JSON.stringify(stillOne.json));
+  assert.deepEqual([stillOne.json.enabled, stillOne.json.keys], [false, []]);
+  assert.equal((await c.storage.getAccountPasskeyCredentialsByUserId(ID.owner, 'twoFactor')).length, 0);
+  assert.equal((await c.storage.getAccountPasskeyCredentialsByUserId(ID.owner, 'login')).length, 1, 'login passkeys stay');
+  assert.equal((await rows(c.db, 'SELECT COUNT(*) AS n FROM refresh_tokens WHERE user_id = ?', ID.owner))[0].n, 0);
+
+  const noneLeft = await call(c, 'owner', 'DELETE', '/api/two-factor/webauthn', { id: 1, masterPasswordHash: PASSWORD });
+  assert.equal(noneLeft.status, 400);
+});
+
 test('folders: POST /folders/{id} renames and POST /folders/{id}/delete deletes', async () => {
   const c = await setup();
   const id = (await call(c, 'owner', 'POST', '/api/folders', { name: enc('f') })).json.id as string;

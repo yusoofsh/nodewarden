@@ -911,7 +911,7 @@ const en: Record<string, string> = {
   "txt_use_passkey_to_complete_two_step_verification": "Use your passkey to complete two-step verification.",
   "txt_touch_your_passkey_when_prompted": "Continue and approve the browser passkey prompt.",
   "txt_no_two_step_passkeys": "No two-step passkeys",
-  "txt_remove_last_passkey_hint": "Disable passkey two-step login to remove the last key.",
+  "txt_remove_last_passkey_hint": "Removing the last key turns passkey two-step login off.",
   "txt_passkey_setup_failed": "Passkey setup failed",
   "txt_passkey_created_at_value": "Created on {value}",
   "txt_account_passkey": "Account passkey",
