@@ -455,7 +455,7 @@ export default function SettingsPage(props: SettingsPageProps) {
   }
 
   async function deleteTwoFactorPasskeyDialog(id: number): Promise<void> {
-    if (twoFactorPasskeySubmitting || !twoFactorPasskeyMasterPassword || twoFactorPasskeys.length < 2) return;
+    if (twoFactorPasskeySubmitting || !twoFactorPasskeyMasterPassword) return;
     setTwoFactorPasskeySubmitting(true);
     try {
       applyTwoFactorPasskeySettings(await props.onDeleteTwoFactorPasskey(id, twoFactorPasskeyMasterPassword));
@@ -1161,7 +1161,7 @@ export default function SettingsPage(props: SettingsPageProps) {
                     <button
                       type="button"
                       className="btn btn-danger small"
-                      disabled={twoFactorPasskeySubmitting || twoFactorPasskeys.length < 2}
+                      disabled={twoFactorPasskeySubmitting}
                       title={twoFactorPasskeys.length < 2 ? t('txt_remove_last_passkey_hint') : t('txt_delete')}
                       onClick={() => void deleteTwoFactorPasskeyDialog(credential.id)}
                     >

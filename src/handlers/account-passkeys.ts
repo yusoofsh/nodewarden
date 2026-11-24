@@ -502,9 +502,11 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
   }
 
   const storage = new StorageService(env.DB);
+  // Deleting the last key turns passkey two-step login off, like Vaultwarden; the response
+  // carries enabled=false so the client can drop the provider without a second call.
   const credentials = await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
-  if (credentials.length < 2) {
-    return errorResponse('Unable to delete WebAuthn credential.', 400);
+  if (!credentials.length) {
+    return errorResponse('Webauthn data not found!', 400);
   }
   const credential = credentials[requestedId - 1];
   if (!credential) {
