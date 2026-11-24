@@ -6,7 +6,6 @@ import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { LIMITS } from '../config/limits';
 import {
-  getBlobStorageMaxBytes,
   getSendFileObjectKey,
   getBlobObject,
   putBlobObject,
@@ -64,7 +63,7 @@ async function processSendFileUpload(
   send: Send,
   fileId: string
 ): Promise<Response> {
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
+  const maxFileSize = LIMITS.send.maxFileSizeBytes;
   const sendData = parseStoredSendData(send);
   const expectedFileId = typeof sendData.id === 'string' ? sendData.id : null;
   if (!expectedFileId || expectedFileId !== fileId) {
@@ -99,11 +98,7 @@ async function processSendFileUpload(
         fileId,
       },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('KV object too large')) {
-      return errorResponse('Send storage limit exceeded with this file', 413);
-    }
+  } catch {
     return errorResponse('Attachment storage is not configured', 500);
   }
 
@@ -274,7 +269,7 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
 
 export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
+  const maxFileSize = LIMITS.send.maxFileSizeBytes;
 
   let body: unknown;
   try {

@@ -42,7 +42,7 @@
 | Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey; email when mail is configured |
 | 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
 | Real-time push sync | ✅ | ✅ | All device sync |
-| Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
+| Attachments / Send | ✅ | ✅ | Cloudflare R2 |
 | Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
 | **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
 | Device management | ✅ | ✅ | **Remove devices; trust controls** |
@@ -71,7 +71,7 @@
 2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. Choose **Continue with GitHub** and select your fork
 4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
-   - For KV mode, change the deploy command to `npm run deploy:kv`
+   - `npm run deploy` creates the `nodewarden-attachments` R2 bucket if it does not exist; R2 needs a payment card on the account
 5. After deployment finishes, open the generated Workers URL
 
 - The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
@@ -80,15 +80,16 @@
 
 - To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
 
-- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
+- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
 
 
 > [!TIP] 
-> Default R2 vs optional KV:
->   | Storage | Card required | Max single attachment / Send file | Free tier |
->   |---|---|---|---|
->   | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
->   | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
+> Attachments and Send files are stored in the `nodewarden-attachments` R2 bucket:
+>   | Card required | Max single attachment / Send file | Free tier |
+>   |---|---|---|
+>   | Yes | 100 MB (soft limit, adjustable) | 10 GB |
+>
+> R2 bucket names are immutable. If your existing bucket is named differently, either copy its objects into `nodewarden-attachments` or change `bucket_name` in `wrangler.toml`.
 
 
 ## Single sign-on (OpenID Connect)
@@ -122,8 +123,8 @@ Off by default: with `SSO_ENABLED` unset the server behaves exactly as without t
   This is usually related to how the GitHub fork is identified or how Cloudflare handles repository authorization and synchronization. If the fork keeps a repository name, description, or other information that is very similar to the upstream project, it may be more likely to trigger related restrictions or issues. It is recommended to rename the repository to something different from the upstream project when creating the fork, and change the repository description as well. For example, you can rename it to `2233warden`. If you have already created the fork, you can rename the repository and update its description in the GitHub repository settings, then try connecting it to Cloudflare again.
 
 - **I deleted my deployment and redeployed it. Why does registration require an invite code again?**  
-  Deleting the Worker or redeploying it does not automatically delete the persistent data that was already created. The users, invite codes, and related configuration stored in the D1 database and KV namespace are still there, so the newly deployed Worker continues to read the existing data and enforce the invite-code requirement.  
-  If you want to start completely from scratch, you need to delete the corresponding **D1 database and KV namespace** as well.
+  Deleting the Worker or redeploying it does not automatically delete the persistent data that was already created. The users, invite codes, and related configuration stored in the D1 database are still there, and attachment files stay in the R2 bucket, so the newly deployed Worker continues to read the existing data and enforce the invite-code requirement.  
+  If you want to start completely from scratch, you need to delete the corresponding **D1 database and R2 bucket** as well.
 
 - **I configured `JWT_SECRET`, but the page still says it is missing. Why?**  
   Make sure `JWT_SECRET` is configured under **Workers → Settings → Variables and Secrets**, specifically as a **Runtime variable or Secret**, rather than under **Build variables**.  
@@ -151,15 +152,11 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# Default: R2 mode
+# The deploy script creates the attachments bucket if it is missing
 npm run deploy
 
-# Optional: KV mode
-npm run deploy:kv
-
-# Local development
+# Local development (local R2 and D1)
 npm run dev
-npm run dev:kv
 ```
 
 ### Optional: outbound mail

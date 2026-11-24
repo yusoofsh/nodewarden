@@ -11,6 +11,7 @@ import { handlePublicRoute } from '../src/router-public';
 import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes } from '../src/services/backup-import';
 import { createTestDb } from './lib/d1-sqlite';
+import { createFakeBucket } from './lib/fake-r2';
 
 // /api/sync caches responses in caches.default, keyed by the user's revision date.
 const cacheStore = new Map<string, Response>();
@@ -38,25 +39,13 @@ function makeUser(actor: Actor): User {
   } as User;
 }
 
-// An R2 stand-in that keeps the bytes, so uploads can be read back.
-function fakeBucket() {
-  const objects = new Map<string, Uint8Array>();
-  return {
-    objects,
-    put: async (key: string, value: ReadableStream) => void objects.set(key, new Uint8Array(await new Response(value).arrayBuffer())),
-    get: async (key: string) => {
-      const bytes = objects.get(key);
-      return bytes ? { body: new Response(bytes).body, size: bytes.length, httpMetadata: {} } : null;
-    },
-    delete: async (key: string) => void objects.delete(key),
-  };
-}
+
 
 async function setup() {
   verifier ??= await createPasswordVerifier(PASSWORD);
   const db = createTestDb();
   await ensureStorageSchema(db);
-  const bucket = fakeBucket();
+  const bucket = createFakeBucket();
   const env = { DB: db, JWT_SECRET: 'x'.repeat(40), ATTACHMENTS: bucket } as unknown as Env;
   const storage = new StorageService(db);
   for (const actor of ACTORS) await storage.createUser(makeUser(actor));

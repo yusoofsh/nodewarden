@@ -42,7 +42,7 @@
 | 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
 | 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
 | 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
-| 附件 / Send| ✅ | ✅ | Cloudflare R2 或 KV |
+| 附件 / Send| ✅ | ✅ | Cloudflare R2 |
 | 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
 | **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
 | 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
@@ -71,7 +71,7 @@
 2. 进入 [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. 选择 Continue with GitHub 并选择你的仓库
 4. 构建命令填 `npm run build`，部署命令填 `npm run deploy`
-- 如果你打算用 KV 模式，把部署命令改成 `npm run deploy:kv`
+- `npm run deploy` 会在需要时创建 `nodewarden-attachments` R2 储存桶；R2 需要账户绑定支付卡
 5. 等部署完成后，打开生成的 Workers 域名
 
 - Workers 默认域名在部分网络环境不可直连。如需自定义域名，到 [Workers 设置](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings)里添加。
@@ -80,15 +80,16 @@
 
 - 如需隐藏 Web Vault，在 Workers 的“设置 → 变量和机密”中添加文本变量 `HIDE_WEB_VAULT`，值设为 `1`。启用后，服务器上的前端页面和静态资源统一返回 `404 Not Found`，Bitwarden 客户端所需的登录、同步、附件、图标、通知等服务端接口仍可使用；已经安装或缓存的 PWA 可以继续使用本地前端。删除该变量（或将值改为非 `1`）即可恢复服务器上的 Web Vault。
 
-- 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 或 `wrangler.kv.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
+- 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
 
 
 > [!TIP] 
-> 默认R2与可选KV的区别：
->   | 储存 | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
->   |---|---|---|---|
->   | R2 | 需要 | 100 MB（软限制可更改） | 10 GB |
->   | KV | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
+> 附件与 Send 文件存放在 `nodewarden-attachments` R2 储存桶：
+>   | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
+>   |---|---|---|
+>   | 需要 | 100 MB（软限制可更改） | 10 GB |
+>
+> R2 储存桶名称不可更改。若已有储存桶名字不同，把对象复制到 `nodewarden-attachments`，或改 `wrangler.toml` 里的 `bucket_name`。
 
 
 ## 常见问题：
@@ -96,8 +97,8 @@
   这通常与 GitHub Fork 仓库的识别或 Cloudflare 对仓库的授权/同步有关。如果 Fork 后仓库名称、描述等信息与上游项目高度一致，可能更容易触发相关限制或异常。建议在 Fork 时就将仓库名称修改为与上游不同的名称，并同时修改仓库描述，例如改为 `2233warden`。如果已经完成 Fork，也可以直接在 GitHub 仓库设置中修改名称和描述，然后重新尝试在 Cloudflare 中连接。
 
 - **我删掉部署后重新部署，为什么注册又开始要求邀请码了？**  
-  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库和 KV 命名空间中的用户、邀请码及相关配置仍然存在，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
-  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 KV 命名空间**。
+  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库中的用户、邀请码及相关配置仍然存在，附件文件也还在 R2 储存桶里，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
+  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 R2 储存桶**。
 
 - **我配置了 `JWT_SECRET`，为什么页面仍然提示缺少？**  
   请将 `JWT_SECRET` 配置在 Cloudflare Workers 的 **Settings → Variables and Secrets** 中，并确保它属于 **Runtime variables and secrets**，而不是 **Build variables**。  
@@ -124,15 +125,11 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# 默认：R2 模式
+# 部署脚本会在储存桶缺失时自动创建
 npm run deploy
 
-# 可选：KV 模式
-npm run deploy:kv
-
-# 本地开发
+# 本地开发（本地 R2 与 D1）
 npm run dev
-npm run dev:kv
 ```
 
 ---

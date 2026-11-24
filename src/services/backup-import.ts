@@ -1,5 +1,5 @@
 import type { Env, User } from '../types';
-import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getAttachmentObjectKey, getBlobStorageKind, putBlobObject } from './blob-store';
+import { deleteBlobObject, getAttachmentObjectKey, getBlobStorageKind, putBlobObject } from './blob-store';
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
@@ -244,7 +244,6 @@ async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
   return keys;
 }
 
-const KV_BLOB_SKIP_REASON = 'Cloudflare KV object size limit (25 MB)';
 const BLOB_STORAGE_UNAVAILABLE_SKIP_REASON = 'Attachment storage is not configured';
 const ATTACHMENT_RESTORE_FAILED_REASON = 'Some attachments could not be restored and were skipped';
 
@@ -387,16 +386,6 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
 
 function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: Record<string, Uint8Array>): PreparedBackupImportPayload {
   const storageKind = getBlobStorageKind(env);
-  if (storageKind === 'r2') {
-    return {
-      payload,
-      skipped: {
-        reason: null,
-        attachments: 0,
-        items: [],
-      },
-    };
-  }
 
   if (storageKind === null) {
     const skippedItems = (payload.db.attachments || []).map((row) => {
@@ -426,49 +415,14 @@ function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: 
     return result;
   }
 
-  const oversizedAttachmentPaths = new Set<string>();
-  const skippedItems: BackupImportSkipSummary['items'] = [];
-
-  for (const entry of Object.keys(files)) {
-    if (!entry.endsWith('.bin')) continue;
-    const sizeBytes = files[entry].byteLength;
-    if (sizeBytes <= KV_MAX_OBJECT_BYTES) continue;
-    if (entry.startsWith('attachments/')) {
-      oversizedAttachmentPaths.add(entry);
-      skippedItems.push({ kind: 'attachment', path: entry, sizeBytes });
-    }
-  }
-
-  const nextAttachments = (payload.db.attachments || []).filter((row) => {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) return false;
-    return !oversizedAttachmentPaths.has(`attachments/${cipherId}/${attachmentId}.bin`);
-  });
-
-  const nextPayload: BackupPayload = {
-    ...payload,
-    db: {
-      ...payload.db,
-      attachments: nextAttachments,
-    },
-  };
-
-  const needsKvBlobStorage = nextAttachments.length > 0;
-
-  if (needsKvBlobStorage && !env.ATTACHMENTS_KV) {
-    throw new Error('Backup restore requires ATTACHMENTS_KV when using KV blob storage');
-  }
-
-  const result = {
-    payload: nextPayload,
+  return {
+    payload,
     skipped: {
-      reason: skippedItems.length ? KV_BLOB_SKIP_REASON : null,
-      attachments: skippedItems.length,
-      items: skippedItems,
+      reason: null,
+      attachments: 0,
+      items: [],
     },
   };
-  return result;
 }
 
 function buildInsertStatements(db: D1Database, table: string, columns: string[], rows: SqlRow[], upsert = false): D1PreparedStatement[] {
@@ -574,10 +528,6 @@ async function prepareRemoteAttachmentPayload(
       continue;
     }
     if (!ref) {
-      skippedItems.push({ kind: 'attachment', path, sizeBytes });
-      continue;
-    }
-    if (storageKind === 'kv' && sizeBytes > KV_MAX_OBJECT_BYTES) {
       skippedItems.push({ kind: 'attachment', path, sizeBytes });
       continue;
     }
