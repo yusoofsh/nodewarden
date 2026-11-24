@@ -22,6 +22,7 @@
     "test:kdf-change": "tsx --test scripts/kdf-change.test.ts",
     "test:key-rotation": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/key-rotation.test.ts",
     "test:account-keys-v2": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/account-keys-v2.test.ts",
+    "test:webapp-v2-guard": "tsx --tsconfig webapp/tsconfig.json --import ./scripts/offline-workers-loader.mjs --test scripts/webapp-v2-guard.test.ts",
     "test:organizations": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/organizations.test.ts",
     "test:org-admin": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/org-admin.test.ts",
     "test:org-ciphers": "tsx --import ./scripts/offline-workers-loader.mjs --test scripts/org-ciphers.test.ts",

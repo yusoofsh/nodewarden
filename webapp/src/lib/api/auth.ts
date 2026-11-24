@@ -607,7 +607,7 @@ export async function unlockVaultKey(profileKey: string, masterKey: Uint8Array):
   const encKey = await hkdfExpand(masterKey, 'enc', 32);
   const macKey = await hkdfExpand(masterKey, 'mac', 32);
   const keyBytes = await decryptBw(profileKey, encKey, macKey);
-  if (!keyBytes || keyBytes.length < 64) throw new Error('Invalid profile key');
+  if (!keyBytes || keyBytes.length !== 64) throw new Error('Invalid profile key');
   return {
     symEncKey: bytesToBase64(keyBytes.slice(0, 32)),
     symMacKey: bytesToBase64(keyBytes.slice(32, 64)),
