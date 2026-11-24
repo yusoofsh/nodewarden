@@ -42,7 +42,7 @@
 | 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
 | 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
 | 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
-| 附件 / Send| ✅ | ✅ | Cloudflare R2 或 KV |
+| 附件 / Send| ✅ | ✅ | Cloudflare KV（可选 R2） |
 | 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
 | **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
 | 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
@@ -71,7 +71,7 @@
 2. 进入 [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. 选择 Continue with GitHub 并选择你的仓库
 4. 构建命令填 `npm run build`，部署命令填 `npm run deploy`
-- 如果你打算用 KV 模式，把部署命令改成 `npm run deploy:kv`
+- `npm run deploy` 会自动创建附件存储所用的 KV 命名空间，无需绑卡或额外配置
 5. 等部署完成后，打开生成的 Workers 域名
 
 - Workers 默认域名在部分网络环境不可直连。如需自定义域名，到 [Workers 设置](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings)里添加。
@@ -80,15 +80,17 @@
 
 - 如需隐藏 Web Vault，在 Workers 的“设置 → 变量和机密”中添加文本变量 `HIDE_WEB_VAULT`，值设为 `1`。启用后，服务器上的前端页面和静态资源统一返回 `404 Not Found`，Bitwarden 客户端所需的登录、同步、附件、图标、通知等服务端接口仍可使用；已经安装或缓存的 PWA 可以继续使用本地前端。删除该变量（或将值改为非 `1`）即可恢复服务器上的 Web Vault。
 
-- 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 或 `wrangler.kv.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
+- 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
 
 
 > [!TIP] 
-> 默认R2与可选KV的区别：
+> 默认KV与可选R2的区别：
 >   | 储存 | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
 >   |---|---|---|---|
->   | R2 | 需要 | 100 MB（软限制可更改） | 10 GB |
->   | KV | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
+>   | KV（默认） | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
+>   | R2（可选） | 需要 | 100 MB（软限制可更改） | 10 GB |
+>
+> 附件与 Send 文件默认使用 KV。若要改用 R2，在 `wrangler.toml` 里添加名为 `ATTACHMENTS` 的 `[[r2_buckets]]` 绑定即可，之后由 R2 接管。
 
 
 ## 常见问题：
@@ -124,15 +126,11 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# 默认：R2 模式
+# 默认使用 KV 储存，部署脚本会自动创建命名空间
 npm run deploy
 
-# 可选：KV 模式
-npm run deploy:kv
-
-# 本地开发
+# 本地开发（本地 KV 与 D1）
 npm run dev
-npm run dev:kv
 ```
 
 ---

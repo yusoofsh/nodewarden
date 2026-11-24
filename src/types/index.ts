@@ -8,9 +8,9 @@ export interface Env {
   };
   // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
   HIDE_WEB_VAULT?: string;
-  // Prefer R2 when available. Optional to support KV-only deployments.
+  // KV is the default backend. An R2 bucket binding takes over when present.
   ATTACHMENTS?: R2Bucket;
-  // Optional fallback for attachment/send file storage (no credit card required).
+  // Default attachment/send-file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
   JWT_SECRET: string;
   WEBAUTHN_RP_ID?: string;

@@ -21,6 +21,9 @@ binding = "DB"
 database_name = "nodewarden"
 database_id = "bd14194a-4ce9-4d34-bd2b-4353fe2d9ee8"
 
+[[kv_namespaces]]
+binding = "ATTACHMENTS_KV"
+
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"
 class_name = "NotificationsHub"
@@ -28,10 +31,6 @@ class_name = "NotificationsHub"
 [[durable_objects.bindings]]
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
-
-[[r2_buckets]]
-binding = "ATTACHMENTS"
-bucket_name = "nodewarden-attachments"
 
 [[migrations]]
 tag = "v1-notifications-hub"

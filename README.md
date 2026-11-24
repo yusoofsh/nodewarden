@@ -42,7 +42,7 @@
 | Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey; email when mail is configured |
 | 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
 | Real-time push sync | ✅ | ✅ | All device sync |
-| Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
+| Attachments / Send | ✅ | ✅ | Cloudflare KV (optional R2) |
 | Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
 | **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
 | Device management | ✅ | ✅ | **Remove devices; trust controls** |
@@ -71,7 +71,7 @@
 2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. Choose **Continue with GitHub** and select your fork
 4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
-   - For KV mode, change the deploy command to `npm run deploy:kv`
+   - `npm run deploy` provisions the KV namespace used for attachment storage; no card or extra setup is needed
 5. After deployment finishes, open the generated Workers URL
 
 - The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
@@ -80,15 +80,17 @@
 
 - To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
 
-- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
+- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
 
 
 > [!TIP] 
-> Default R2 vs optional KV:
+> Default KV vs optional R2:
 >   | Storage | Card required | Max single attachment / Send file | Free tier |
 >   |---|---|---|---|
->   | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
->   | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
+>   | KV (default) | No | 25 MiB (Cloudflare limit) | 1 GB |
+>   | R2 (optional) | Yes | 100 MB (soft limit, adjustable) | 10 GB |
+>
+> Attachments and Send files use KV out of the box. To switch to R2, add an `[[r2_buckets]]` binding named `ATTACHMENTS` to `wrangler.toml`; R2 then takes over.
 
 
 ## Single sign-on (OpenID Connect)
@@ -151,15 +153,11 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# Default: R2 mode
+# KV storage is the default; the deploy script provisions the namespace
 npm run deploy
 
-# Optional: KV mode
-npm run deploy:kv
-
-# Local development
+# Local development (local KV and D1)
 npm run dev
-npm run dev:kv
 ```
 
 ### Optional: outbound mail

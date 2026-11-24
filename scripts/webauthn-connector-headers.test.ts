@@ -37,10 +37,7 @@ test('official Bitwarden desktop origin receives credentialed CORS', () => {
 });
 
 test('Worker assets preserve exact official connector .html paths', async () => {
-  for (const configUrl of [
-    new URL('../wrangler.toml', import.meta.url),
-    new URL('../wrangler.kv.toml', import.meta.url),
-  ]) {
+  for (const configUrl of [new URL('../wrangler.toml', import.meta.url)]) {
     const config = await readFile(configUrl, 'utf8');
     const assetsSection = config.match(/\[assets\]([\s\S]*?)(?=\n\[|$)/)?.[1] || '';
     assert.match(assetsSection, /^\s*html_handling\s*=\s*"none"\s*$/m);

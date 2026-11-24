@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Make `deploy:kv` idempotent across repeated builds.
+ * Make `npm run deploy` idempotent across repeated builds.
  *
  * KV namespaces are referenced in wrangler config by account-scoped `id`, not
  * by name. The template ships without an id so fresh accounts can provision one
@@ -11,7 +11,7 @@ const { execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CONFIG = path.resolve(__dirname, '..', 'wrangler.kv.toml');
+const CONFIG = path.resolve(__dirname, '..', 'wrangler.toml');
 const BINDING = 'ATTACHMENTS_KV';
 
 const wrangler = (args) =>
@@ -48,7 +48,7 @@ function resolveId(title) {
 function main() {
   let toml = fs.readFileSync(CONFIG, 'utf8');
   if (bindingBlockHasId(toml)) {
-    console.log(`[ensure-kv] ${BINDING} already pinned in wrangler.kv.toml; nothing to do`);
+    console.log(`[ensure-kv] ${BINDING} already pinned in wrangler.toml; nothing to do`);
     return;
   }
 
@@ -58,7 +58,7 @@ function main() {
     `$1\nid = "${id}"`
   );
   fs.writeFileSync(CONFIG, toml);
-  console.log('[ensure-kv] pinned id into wrangler.kv.toml for this build');
+  console.log('[ensure-kv] pinned id into wrangler.toml for this build');
 }
 
 main();

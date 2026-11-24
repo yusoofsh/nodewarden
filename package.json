@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "wrangler dev -c wrangler.toml",
-    "dev:kv": "wrangler dev -c wrangler.kv.toml",
+    "dev:kv": "wrangler dev -c wrangler.toml",
     "dev:demo": "vite --config webapp/vite.config.ts --mode demo --host 127.0.0.1 --port 5174",
     "build": "vite build --config webapp/vite.config.ts",
     "build:demo": "vite build --config webapp/vite.config.ts --mode demo && node scripts/pages-spa-redirects.cjs",
@@ -42,8 +42,8 @@
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
-    "deploy": "wrangler deploy",
-    "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
+    "deploy": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.toml",
+    "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.toml",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo"
   },
   "keywords": [
@@ -61,11 +61,11 @@
       "DB": {
         "description": "D1 database for storing vault data"
       },
-      "ATTACHMENTS": {
-        "description": "R2 bucket for storing file attachments"
-      },
       "ATTACHMENTS_KV": {
-        "description": "Optional KV namespace fallback for attachment/send-file storage"
+        "description": "KV namespace for attachment and send-file storage"
+      },
+      "ATTACHMENTS": {
+        "description": "Optional R2 bucket, preferred over KV when bound"
       }
     }
   },
