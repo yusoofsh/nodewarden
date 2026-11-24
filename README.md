@@ -88,6 +88,8 @@
 >   | Card required | Max single attachment / Send file | Free tier |
 >   |---|---|---|
 >   | Yes | 100 MB (soft limit, adjustable) | 10 GB |
+>
+> R2 bucket names are immutable. If your existing bucket is named differently, either copy its objects into `nodewarden-attachments` or change `bucket_name` in `wrangler.toml`.
 
 
 ## Single sign-on (OpenID Connect)

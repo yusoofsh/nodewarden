@@ -21,6 +21,7 @@ binding = "DB"
 database_name = "nodewarden"
 database_id = "bd14194a-4ce9-4d34-bd2b-4353fe2d9ee8"
 
+# R2 bucket names cannot be renamed; point this at the existing bucket if it differs.
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "nodewarden-attachments"
