@@ -42,7 +42,7 @@
 | Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey; email when mail is configured |
 | 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
 | Real-time push sync | ✅ | ✅ | All device sync |
-| Attachments / Send | ✅ | ✅ | Cloudflare KV (optional R2) |
+| Attachments / Send | ✅ | ✅ | Cloudflare KV |
 | Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
 | **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
 | Device management | ✅ | ✅ | **Remove devices; trust controls** |
@@ -84,13 +84,10 @@
 
 
 > [!TIP] 
-> Default KV vs optional R2:
->   | Storage | Card required | Max single attachment / Send file | Free tier |
->   |---|---|---|---|
->   | KV (default) | No | 25 MiB (Cloudflare limit) | 1 GB |
->   | R2 (optional) | Yes | 100 MB (soft limit, adjustable) | 10 GB |
->
-> Attachments and Send files use KV out of the box. To switch to R2, add an `[[r2_buckets]]` binding named `ATTACHMENTS` to `wrangler.toml`; R2 then takes over.
+> Attachments and Send files are stored in Cloudflare KV:
+>   | Card required | Max single attachment / Send file | Free tier |
+>   |---|---|---|
+>   | No | 25 MiB (Cloudflare limit) | 1 GB |
 
 
 ## Single sign-on (OpenID Connect)
@@ -159,6 +156,25 @@ npm run deploy
 # Local development (local KV and D1)
 npm run dev
 ```
+
+### Migrating attachments from R2
+
+Deployments created before KV became the only blob backend still hold their attachments and Send
+files in the `nodewarden-attachments` R2 bucket. Copy them into the KV namespace before deploying
+this version; R2 files are invisible to the Worker afterwards.
+
+```powershell
+# preview what would be copied
+npm run migrate:kv -- --dry-run
+
+# copy (re-run safe; reads R2, writes KV)
+npm run migrate:kv
+```
+
+Use `--bucket <name>` if the bucket is named differently, and `--prefix takes/` to limit a run.
+Objects over the 25 MiB KV limit are listed and skipped, so re-upload those from a client once KV is
+live. The script needs `CLOUDFLARE_API_TOKEN` with R2 read and Workers KV write, or a `wrangler login`
+session. Nothing is deleted from R2, so its binding can be removed from `wrangler.toml` once verified.
 
 ### Optional: outbound mail
 

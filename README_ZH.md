@@ -42,7 +42,7 @@
 | 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
 | 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
 | 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
-| 附件 / Send| ✅ | ✅ | Cloudflare KV（可选 R2） |
+| 附件 / Send| ✅ | ✅ | Cloudflare KV |
 | 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
 | **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
 | 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
@@ -84,13 +84,10 @@
 
 
 > [!TIP] 
-> 默认KV与可选R2的区别：
->   | 储存 | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
->   |---|---|---|---|
->   | KV（默认） | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
->   | R2（可选） | 需要 | 100 MB（软限制可更改） | 10 GB |
->
-> 附件与 Send 文件默认使用 KV。若要改用 R2，在 `wrangler.toml` 里添加名为 `ATTACHMENTS` 的 `[[r2_buckets]]` 绑定即可，之后由 R2 接管。
+> 附件与 Send 文件存放在 Cloudflare KV：
+>   | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
+>   |---|---|---|
+>   | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
 
 
 ## 常见问题：
@@ -132,6 +129,20 @@ npm run deploy
 # 本地开发（本地 KV 与 D1）
 npm run dev
 ```
+
+### 从 R2 迁移附件
+
+在 KV 成为唯一附件储存之前建立的部署，附件与 Send 文件仍留在 `nodewarden-attachments` R2 储存桶里。部署本版本前请先把它们复制到 KV 命名空间；部署后 Worker 不再读取 R2 文件。
+
+```powershell
+# 先预览要复制的内容
+npm run migrate:kv -- --dry-run
+
+# 执行复制（可重复运行；只读 R2、写入 KV）
+npm run migrate:kv
+```
+
+储存桶名称不同可加 `--bucket <名称>`，只想处理某个前缀可加 `--prefix takes/`。超过 KV 25 MiB 上限的对象会列出并跳过，KV 上线后请在客户端重新上传。脚本需要具备 R2 读取和 KV 写入权限的 `CLOUDFLARE_API_TOKEN`，或先 `wrangler login`。脚本不删除 R2 中的对象，确认无误后即可从 `wrangler.toml` 移除 R2 绑定。
 
 ---
 

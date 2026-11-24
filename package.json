@@ -44,6 +44,7 @@
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "deploy": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.toml",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.toml",
+    "migrate:kv": "node scripts/migrate-r2-to-kv.cjs",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo"
   },
   "keywords": [
@@ -63,9 +64,6 @@
       },
       "ATTACHMENTS_KV": {
         "description": "KV namespace for attachment and send-file storage"
-      },
-      "ATTACHMENTS": {
-        "description": "Optional R2 bucket, preferred over KV when bound"
       }
     }
   },

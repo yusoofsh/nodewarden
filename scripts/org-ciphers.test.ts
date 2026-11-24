@@ -47,7 +47,7 @@ async function newDb(): Promise<{ db: D1Database; env: Env; deletedBlobs: string
   const env = {
     DB: db,
     JWT_SECRET: 'x'.repeat(40),
-    ATTACHMENTS: { delete: async (key: string) => void deletedBlobs.push(key) },
+    ATTACHMENTS_KV: { delete: async (key: string) => void deletedBlobs.push(key) },
   } as unknown as Env;
   return { db, env, deletedBlobs };
 }

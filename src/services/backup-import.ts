@@ -387,16 +387,6 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
 
 function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: Record<string, Uint8Array>): PreparedBackupImportPayload {
   const storageKind = getBlobStorageKind(env);
-  if (storageKind === 'r2') {
-    return {
-      payload,
-      skipped: {
-        reason: null,
-        attachments: 0,
-        items: [],
-      },
-    };
-  }
 
   if (storageKind === null) {
     const skippedItems = (payload.db.attachments || []).map((row) => {
@@ -577,7 +567,7 @@ async function prepareRemoteAttachmentPayload(
       skippedItems.push({ kind: 'attachment', path, sizeBytes });
       continue;
     }
-    if (storageKind === 'kv' && sizeBytes > KV_MAX_OBJECT_BYTES) {
+    if (sizeBytes > KV_MAX_OBJECT_BYTES) {
       skippedItems.push({ kind: 'attachment', path, sizeBytes });
       continue;
     }

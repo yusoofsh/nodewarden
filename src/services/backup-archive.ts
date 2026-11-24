@@ -52,7 +52,7 @@ export interface BackupManifest {
   formatVersion: 1;
   exportedAt: string;
   appVersion: string;
-  storageKind: 'r2' | 'kv' | null;
+  storageKind: 'kv' | null;
   tableCounts: Record<string, number>;
   includes: {
     attachments: boolean;

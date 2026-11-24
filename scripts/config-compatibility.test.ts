@@ -18,6 +18,10 @@ test('wrangler.toml is the single config and binds KV attachment storage', () =>
   assert.match(config, /^\[\[kv_namespaces\]\]\n\s*binding = "ATTACHMENTS_KV"$/m);
   assert.doesNotMatch(config, /^\[\[r2_buckets\]\]/m);
 
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.match(pkg.scripts.deploy, /scripts\/ensure-kv\.cjs/);
+  assert.ok(pkg.scripts['migrate:kv']);
+
   assert.throws(
     () => readFileSync(new URL('../wrangler.kv.toml', import.meta.url), 'utf8'),
     /ENOENT/
