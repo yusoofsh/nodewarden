@@ -1,4 +1,4 @@
-import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr, encryptBw, encryptBwFileData, sha256Base64 } from '../crypto';
+import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr, encryptBw, encryptBwFileData, normalizeTotpInput, sha256Base64 } from '../crypto';
 import type {
   Cipher,
   CipherPasswordHistoryEntry,
@@ -513,6 +513,15 @@ async function encryptTextValue(value: string, enc: Uint8Array, mac: Uint8Array)
   const s = String(value || '');
   if (!s.trim()) return null;
   return encryptBw(new TextEncoder().encode(s), enc, mac);
+}
+
+// Login TOTP can arrive three ways: a fresh secret, an otpauth URI, or the value
+// already encrypted by an earlier load. Encrypting an encrypted value again grows
+// it on every save until the server's 1000-character limit rejects the whole item.
+async function encryptTotpValue(value: string, enc: Uint8Array, mac: Uint8Array): Promise<string | null> {
+  const normalized = normalizeTotpInput(String(value || ''));
+  if (!normalized.trim() || /^\d+\./.test(normalized.trim())) return normalized.trim() || null;
+  return encryptBw(new TextEncoder().encode(normalized), enc, mac);
 }
 
 function stripDecodedObjectFields(value: unknown): Record<string, unknown> {
@@ -1328,7 +1337,7 @@ async function buildCipherPayload(
       ...existingLogin,
       username: await encryptTextValue(draft.loginUsername, keys.enc, keys.mac),
       password: await encryptTextValue(draft.loginPassword, keys.enc, keys.mac),
-      totp: await encryptTextValue(draft.loginTotp, keys.enc, keys.mac),
+      totp: await encryptTotpValue(draft.loginTotp, keys.enc, keys.mac),
       passwordRevisionDate: passwordChanged ? now : existingLogin.passwordRevisionDate ?? null,
       fido2Credentials: await normalizeFido2Credentials(existingFido2, keys.enc, keys.mac),
       uris: await encryptUris(draft.loginUris || [], keys.enc, keys.mac),

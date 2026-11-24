@@ -569,7 +569,7 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
   if (cipher.login) {
     draft.loginUsername = cipher.login.decUsername || '';
     draft.loginPassword = cipher.login.decPassword || '';
-    draft.loginTotp = cipher.login.decTotp || '';
+    draft.loginTotp = cipher.login.decTotp || cipher.login.totp || '';
     draft.loginUris = (cipher.login.uris || []).map((x) => ({
       uri: x.decUri || x.uri || '',
       match: x.match ?? null,
