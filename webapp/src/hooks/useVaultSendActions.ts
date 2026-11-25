@@ -1204,7 +1204,7 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           const userEnc = base64ToBytes(session.symEncKey!);
           const userMac = base64ToBytes(session.symMacKey!);
           const out: ZipAttachmentEntry[] = [];
-          const activeCiphers = rawCiphers.filter((cipher) => !cipher.deletedDate && !(cipher as { organizationId?: unknown }).organizationId);
+          const activeCiphers = rawCiphers.filter((cipher) => !cipher.deletedDate);
 
           for (const cipher of activeCiphers) {
             const cipherId = String(cipher.id || '').trim();

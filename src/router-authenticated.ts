@@ -53,12 +53,6 @@ import {
   handlePurgeVault,
 } from './handlers/ciphers';
 import {
-  handleGetOrganizationCipherDetails,
-  handleShareCipher,
-  handleShareCiphers,
-  handleUpdateCipherCollections,
-} from './handlers/org-ciphers';
-import {
   handleGetFolders,
   handleGetFolder,
   handleCreateFolder,
@@ -99,9 +93,6 @@ import {
   handleRotateSecurityStamp,
 } from './handlers/account-compat';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
-import { handleOrganizationRoute } from './router-organizations';
-import { handleCollectEvents, handleGetCipherEvents } from './handlers/events';
-import { eventActor } from './services/events';
 import { handleAdminRoute } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
@@ -378,37 +369,11 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Not found', 404);
   }
 
-  if (path === '/events/collect' && method === 'POST') {
-    return handleCollectEvents(request, env, eventActor(request, userId));
-  }
-
   if (path === '/api/ciphers' || path === '/api/ciphers/create') {
     if (method === 'GET') return handleGetCiphers(request, env, userId);
     if (method === 'POST') return handleCreateCipher(request, env, userId);
     if (path === '/api/ciphers' && method === 'DELETE') return handleBulkPermanentDeleteCiphers(request, env, userId);
     return null;
-  }
-
-  // Administrative variants of the bulk routes: access to organization ciphers is checked per
-  // cipher, and a member with full access may write them all, so they share the handlers.
-  if (path === '/api/ciphers/admin') {
-    if (method === 'POST') return handleCreateCipher(request, env, userId, true);
-    if (method === 'DELETE') return handleBulkPermanentDeleteCiphers(request, env, userId);
-    return null;
-  }
-  if (path === '/api/ciphers/delete-admin') {
-    if (method === 'PUT') return handleBulkDeleteCiphers(request, env, userId);
-    if (method === 'POST') return handleBulkPermanentDeleteCiphers(request, env, userId);
-    return null;
-  }
-  if (path === '/api/ciphers/restore-admin' && method === 'PUT') {
-    return handleBulkRestoreCiphers(request, env, userId);
-  }
-  if (path === '/api/ciphers/share' && (method === 'PUT' || method === 'POST')) {
-    return handleShareCiphers(request, env, userId);
-  }
-  if (path === '/api/ciphers/organization-details' && method === 'GET') {
-    return handleGetOrganizationCipherDetails(request, env, userId);
   }
 
   if (path === '/api/ciphers/purge' && method === 'POST') {
@@ -453,40 +418,21 @@ export async function handleAuthenticatedRoute(
       if (method === 'PUT' || method === 'POST') return handleUpdateCipher(request, env, userId, cipherId);
       if (method === 'DELETE') return handleDeleteCipherCompat(request, env, userId, cipherId);
     }
-    if (subPath === '/admin') {
-      if (method === 'GET') return handleGetCipher(request, env, userId, cipherId);
-      if (method === 'PUT' || method === 'POST') return handleUpdateCipher(request, env, userId, cipherId, true);
-      if (method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId);
-    }
-    if (subPath === '/delete-admin' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
-    if (subPath === '/delete-admin' && method === 'POST') return handlePermanentDeleteCipher(request, env, userId, cipherId);
-    if (subPath === '/restore-admin' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
-    if ((subPath === '/collections' || subPath === '/collections_v2' || subPath === '/collections-admin') && (method === 'PUT' || method === 'POST')) {
-      const variant = subPath === '/collections' ? 'user' : subPath === '/collections_v2' ? 'v2' : 'admin';
-      return handleUpdateCipherCollections(request, env, userId, cipherId, variant);
-    }
-
     if (subPath === '/delete' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/delete' && (method === 'DELETE' || method === 'POST')) return handlePermanentDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/restore' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
-    if (subPath === '/events' && method === 'GET') return handleGetCipherEvents(request, env, userId, cipherId.toLowerCase());
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
-    if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
-    if ((subPath === '/attachment' || subPath === '/attachment-admin') && method === 'POST') {
+    if (subPath === '/attachment' && method === 'POST') {
       const multipart = (request.headers.get('content-type') || '').includes('multipart/form-data');
       return multipart
         ? handleLegacyUploadAttachment(request, env, userId, cipherId)
         : handleCreateAttachment(request, env, userId, cipherId);
     }
 
-    const attachmentShareMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/share$/i);
-    if (attachmentShareMatch && method === 'POST') {
-      return handleLegacyUploadAttachment(request, env, userId, cipherId, attachmentShareMatch[1]);
-    }
 
     const attachmentAdminMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/(admin|delete-admin)$/i);
     if (attachmentAdminMatch) {
@@ -560,8 +506,19 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Method not allowed', 405);
   }
 
-  const organizationResponse = await handleOrganizationRoute(request, env, userId, path, method);
-  if (organizationResponse) return organizationResponse;
+  if (path === '/api/collections' || path.startsWith('/api/collections/')) {
+    if (method === 'GET') {
+      return jsonResponse({ data: [], object: 'list', continuationToken: null });
+    }
+    return null;
+  }
+
+  if (path === '/api/organizations' || path.startsWith('/api/organizations/')) {
+    if (method === 'GET') {
+      return jsonResponse({ data: [], object: 'list', continuationToken: null });
+    }
+    return null;
+  }
 
   if (path === '/api/sends') {
     if (method === 'GET') return handleGetSends(request, env, userId);

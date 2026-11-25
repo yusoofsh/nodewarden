@@ -31,12 +31,7 @@ async function fixture(ctx: TestContext) {
     CREATE TABLE ciphers(id TEXT PRIMARY KEY, user_id TEXT, type INTEGER,
       folder_id TEXT, name TEXT, notes TEXT, favorite INTEGER, data TEXT,
       reprompt INTEGER, key TEXT, created_at TEXT, updated_at TEXT,
-      archived_at TEXT, deleted_at TEXT, organization_id TEXT);
-    CREATE TABLE organization_members(id TEXT, organization_id TEXT, user_id TEXT, status INTEGER, type INTEGER, access_all INTEGER);
-    CREATE TABLE collection_members(collection_id TEXT, member_id TEXT, read_only INTEGER, hide_passwords INTEGER, manage INTEGER);
-    CREATE TABLE collection_ciphers(collection_id TEXT, cipher_id TEXT);
-    CREATE TABLE group_members(group_id TEXT, member_id TEXT);
-    CREATE TABLE collection_groups(collection_id TEXT, group_id TEXT, read_only INTEGER, hide_passwords INTEGER, manage INTEGER);
+      archived_at TEXT, deleted_at TEXT);
     CREATE TABLE attachments(id TEXT PRIMARY KEY, cipher_id TEXT,
       file_name TEXT, size INTEGER, size_name TEXT, key TEXT);
     CREATE TABLE devices(user_id TEXT, push_token TEXT);

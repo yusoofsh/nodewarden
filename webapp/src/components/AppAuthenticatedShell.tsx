@@ -152,7 +152,6 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
           {renderSubLink(props.settingsAccountRoute, props.location === props.settingsAccountRoute, t('nav_account_settings'))}
           {renderSubLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, t('nav_device_management'))}
           {renderSubLink('/settings/domain-rules', props.location === '/settings/domain-rules', t('nav_domain_rules'))}
-          {!IS_DEMO_MODE && renderSubLink('/organizations', props.location === '/organizations', t('nav_organizations'))}
           {!IS_DEMO_MODE && renderSubLink('/emergency-access', props.location === '/emergency-access', t('nav_emergency_access'))}
         </>
       )}

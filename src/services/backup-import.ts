@@ -6,7 +6,6 @@ import {
   type BackupManifestAttachmentBlob,
   type BackupPayload,
   EMERGENCY_ACCESS_COLUMNS,
-  EVENT_COLUMNS,
   SSO_USER_COLUMNS,
   USER_SIGNATURE_KEY_PAIR_COLUMNS,
   isSafeBackupAttachmentBlobName,
@@ -33,20 +32,10 @@ type BackupTableName =
   | 'domain_settings'
   | 'user_revisions'
   | 'webauthn_credentials'
-  | 'organizations'
-  | 'organization_members'
-  | 'collections'
-  | 'collection_members'
-  | 'organization_groups'
-  | 'group_members'
-  | 'collection_groups'
-  | 'organization_policies'
   | 'folders'
   | 'ciphers'
-  | 'collection_ciphers'
   | 'attachments'
   | 'emergency_access'
-  | 'events'
   | 'sso_users'
   | 'user_signature_key_pairs';
 
@@ -56,20 +45,10 @@ const BACKUP_TABLES: BackupTableName[] = [
   'domain_settings',
   'user_revisions',
   'webauthn_credentials',
-  'organizations',
-  'organization_members',
-  'collections',
-  'collection_members',
-  'organization_groups',
-  'group_members',
-  'collection_groups',
-  'organization_policies',
   'folders',
   'ciphers',
-  'collection_ciphers',
   'attachments',
   'emergency_access',
-  'events',
   'sso_users',
   'user_signature_key_pairs',
 ];
@@ -193,11 +172,10 @@ async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
     db.prepare('SELECT COUNT(*) AS count FROM folders').first<{ count: number }>(),
     db.prepare('SELECT COUNT(*) AS count FROM attachments').first<{ count: number }>(),
     db.prepare('SELECT COUNT(*) AS count FROM sends').first<{ count: number }>(),
-    db.prepare('SELECT COUNT(*) AS count FROM organizations').first<{ count: number }>(),
   ]);
   const total = counts.reduce((sum, row) => sum + Number(row?.count || 0), 0);
   if (total > 0) {
-    throw new Error('Backup import requires a fresh instance with no vault, send or organization data');
+    throw new Error('Backup import requires a fresh instance with no vault or send data');
   }
 }
 
@@ -205,20 +183,10 @@ function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[]
   return [
     'DELETE FROM user_signature_key_pairs',
     'DELETE FROM sso_users',
-    'DELETE FROM events',
     'DELETE FROM emergency_access',
     'DELETE FROM attachments',
-    'DELETE FROM collection_ciphers',
     'DELETE FROM ciphers',
     'DELETE FROM folders',
-    'DELETE FROM organization_policies',
-    'DELETE FROM collection_groups',
-    'DELETE FROM group_members',
-    'DELETE FROM organization_groups',
-    'DELETE FROM collection_members',
-    'DELETE FROM collections',
-    'DELETE FROM organization_members',
-    'DELETE FROM organizations',
     'DELETE FROM webauthn_credentials',
     'DELETE FROM domain_settings',
     'DELETE FROM user_revisions',
@@ -359,24 +327,13 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
       ...row,
       purpose: normalizeAccountPasskeyPurpose(row.purpose),
     })),
-    organizations: cloneRows(payload.organizations || []),
-    organization_members: cloneRows(payload.organization_members || []),
-    collections: cloneRows(payload.collections || []),
-    collection_members: cloneRows(payload.collection_members || []),
-    organization_groups: cloneRows(payload.organization_groups || []),
-    group_members: cloneRows(payload.group_members || []),
-    collection_groups: cloneRows(payload.collection_groups || []),
-    organization_policies: cloneRows(payload.organization_policies || []),
     folders: cloneRows(payload.folders || []),
     ciphers: cloneRows(payload.ciphers || []).map((row) => ({
       ...row,
       archived_at: row.archived_at ?? null,
-      organization_id: row.organization_id ?? null,
     })),
-    collection_ciphers: cloneRows(payload.collection_ciphers || []),
     attachments: cloneRows(payload.attachments || []),
     emergency_access: cloneRows(payload.emergency_access || []),
-    events: cloneRows(payload.events || []),
     sso_users: cloneRows(payload.sso_users || []),
     user_signature_key_pairs: cloneRows(payload.user_signature_key_pairs || []),
   };
@@ -684,54 +641,6 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
   );
   await runInsertBatch(
     db,
-    tableName('organizations'),
-    buildInsertStatements(
-      db,
-      tableName('organizations'),
-      ['id', 'name', 'billing_email', 'private_key', 'public_key', 'created_at', 'updated_at'],
-      payload.organizations || []
-    )
-  );
-  await runInsertBatch(
-    db,
-    tableName('organization_members'),
-    buildInsertStatements(
-      db,
-      tableName('organization_members'),
-      ['id', 'organization_id', 'user_id', 'akey', 'status', 'type', 'access_all', 'reset_password_key', 'external_id', 'v2_upgrade_token', 'created_at', 'updated_at'],
-      payload.organization_members || []
-    )
-  );
-  await runInsertBatch(
-    db,
-    tableName('collections'),
-    buildInsertStatements(
-      db,
-      tableName('collections'),
-      ['id', 'organization_id', 'name', 'external_id', 'created_at', 'updated_at'],
-      payload.collections || []
-    )
-  );
-  await runInsertBatch(
-    db,
-    tableName('collection_members'),
-    buildInsertStatements(
-      db,
-      tableName('collection_members'),
-      ['collection_id', 'member_id', 'read_only', 'hide_passwords', 'manage'],
-      payload.collection_members || []
-    )
-  );
-  for (const [table, columns] of [
-    ['organization_groups', ['id', 'organization_id', 'name', 'external_id', 'created_at', 'updated_at']],
-    ['group_members', ['group_id', 'member_id']],
-    ['collection_groups', ['collection_id', 'group_id', 'read_only', 'hide_passwords', 'manage']],
-    ['organization_policies', ['id', 'organization_id', 'type', 'enabled', 'data', 'updated_at']],
-  ] as const) {
-    await runInsertBatch(db, tableName(table), buildInsertStatements(db, tableName(table), [...columns], payload[table] || []));
-  }
-  await runInsertBatch(
-    db,
     tableName('folders'),
     buildInsertStatements(db, tableName('folders'), ['id', 'user_id', 'name', 'created_at', 'updated_at'], payload.folders || [])
   );
@@ -741,14 +650,9 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('ciphers'),
-      ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at', 'organization_id'],
+      ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
       payload.ciphers || []
     )
-  );
-  await runInsertBatch(
-    db,
-    tableName('collection_ciphers'),
-    buildInsertStatements(db, tableName('collection_ciphers'), ['collection_id', 'cipher_id'], payload.collection_ciphers || [])
   );
   await runInsertBatch(
     db,
@@ -760,7 +664,6 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     tableName('emergency_access'),
     buildInsertStatements(db, tableName('emergency_access'), EMERGENCY_ACCESS_COLUMNS, payload.emergency_access || [])
   );
-  await runInsertBatch(db, tableName('events'), buildInsertStatements(db, tableName('events'), EVENT_COLUMNS, payload.events || []));
   await runInsertBatch(db, tableName('sso_users'), buildInsertStatements(db, tableName('sso_users'), SSO_USER_COLUMNS, payload.sso_users || []));
   await runInsertBatch(
     db,
@@ -816,17 +719,7 @@ export async function importBackupArchiveBytes(
       domain_settings: (db.domain_settings || []).length,
       user_revisions: (db.user_revisions || []).length,
       webauthn_credentials: (db.webauthn_credentials || []).length,
-      organizations: (db.organizations || []).length,
-      organization_members: (db.organization_members || []).length,
-      collections: (db.collections || []).length,
-      collection_members: (db.collection_members || []).length,
-      organization_groups: (db.organization_groups || []).length,
-      group_members: (db.group_members || []).length,
-      collection_groups: (db.collection_groups || []).length,
-      organization_policies: (db.organization_policies || []).length,
-      collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
-      events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
       user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
@@ -852,17 +745,7 @@ export async function importBackupArchiveBytes(
       domain_settings: (db.domain_settings || []).length,
       user_revisions: (db.user_revisions || []).length,
       webauthn_credentials: (db.webauthn_credentials || []).length,
-      organizations: (db.organizations || []).length,
-      organization_members: (db.organization_members || []).length,
-      collections: (db.collections || []).length,
-      collection_members: (db.collection_members || []).length,
-      organization_groups: (db.organization_groups || []).length,
-      group_members: (db.group_members || []).length,
-      collection_groups: (db.collection_groups || []).length,
-      organization_policies: (db.organization_policies || []).length,
-      collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
-      events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
       user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
@@ -983,17 +866,7 @@ export async function importRemoteBackupArchiveBytes(
       domain_settings: (db.domain_settings || []).length,
       user_revisions: (db.user_revisions || []).length,
       webauthn_credentials: (db.webauthn_credentials || []).length,
-      organizations: (db.organizations || []).length,
-      organization_members: (db.organization_members || []).length,
-      collections: (db.collections || []).length,
-      collection_members: (db.collection_members || []).length,
-      organization_groups: (db.organization_groups || []).length,
-      group_members: (db.group_members || []).length,
-      collection_groups: (db.collection_groups || []).length,
-      organization_policies: (db.organization_policies || []).length,
-      collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
-      events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
       user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,
@@ -1019,17 +892,7 @@ export async function importRemoteBackupArchiveBytes(
       domain_settings: (db.domain_settings || []).length,
       user_revisions: (db.user_revisions || []).length,
       webauthn_credentials: (db.webauthn_credentials || []).length,
-      organizations: (db.organizations || []).length,
-      organization_members: (db.organization_members || []).length,
-      collections: (db.collections || []).length,
-      collection_members: (db.collection_members || []).length,
-      organization_groups: (db.organization_groups || []).length,
-      group_members: (db.group_members || []).length,
-      collection_groups: (db.collection_groups || []).length,
-      organization_policies: (db.organization_policies || []).length,
-      collection_ciphers: (db.collection_ciphers || []).length,
       emergency_access: (db.emergency_access || []).length,
-      events: (db.events || []).length,
       sso_users: (db.sso_users || []).length,
       user_signature_key_pairs: (db.user_signature_key_pairs || []).length,
       folders: (db.folders || []).length,

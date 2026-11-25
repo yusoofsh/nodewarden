@@ -87,18 +87,6 @@ const login = (label: string, extra: Record<string, unknown> = {}) => ({
   login: { username: enc(`${label}-user`), password: enc(`${label}-pass`), uris: [] }, ...extra,
 });
 
-async function createOrg(c: Ctx): Promise<{ orgId: string; collectionId: string }> {
-  const orgId = (await call(c, 'owner', 'POST', '/api/organizations', {
-    name: 'Org', billingEmail: 'o@example.test', collectionName: enc('default'), key: '4.ownerkey',
-  })).json.id as string;
-  await c.db
-    .prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, created_at, updated_at) VALUES (?, ?, ?, '4.akey', 2, 2, 1, '2026-01-02', '2026-01-02')")
-    .bind(crypto.randomUUID(), orgId, ID.member)
-    .run();
-  const [collection] = await rows(c.db, 'SELECT id FROM collections WHERE organization_id = ?', orgId);
-  return { orgId, collectionId: collection.id };
-}
-
 function legacyForm(fileName: string | null, key: string | null, content = 'ciphertext') {
   const form = new FormData();
   if (key !== null) form.set('key', key);
@@ -152,11 +140,11 @@ test('avatar: backup export and restore carry the color', async () => {
   );
 });
 
-test('key rotation data lists keyed emergency contacts and recovery-enrolled organizations', async () => {
+test('key rotation data lists keyed emergency contacts', async () => {
   const c = await setup();
   const empty = await call(c, 'owner', 'GET', '/api/accounts/key-management/key-rotation-data');
   assert.deepEqual(empty.json, {
-    organizationPasswordResetKeyData: [], emergencyAccessKeyData: [], trustedDeviceKeyData: [], passkeyKeyData: [], object: 'keyRotationData',
+    emergencyAccessKeyData: [], trustedDeviceKeyData: [], passkeyKeyData: [], object: 'keyRotationData',
   });
 
   const insertAccess = (id: string, granteeId: string | null, key: string | null, status: number) =>
@@ -167,23 +155,7 @@ test('key rotation data lists keyed emergency contacts and recovery-enrolled org
   await insertAccess('ea-keyed', ID.member, '4.wrapped', 2);
   await insertAccess('ea-unkeyed', ID.outsider, null, 1);
 
-  const { orgId } = await createOrg(c);
-  const second = (await call(c, 'owner', 'POST', '/api/organizations', {
-    name: 'Not enrolled', billingEmail: 'n@example.test', collectionName: enc('n'), key: '4.k',
-  })).json.id as string;
-  await c.db.prepare("UPDATE organizations SET public_key = 'org-pub' WHERE id IN (?, ?)").bind(orgId, second).run();
-  await c.db.prepare("UPDATE organization_members SET reset_password_key = '4.reset' WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
-
-  // A revoked member that was enrolled stays enrolled: the rotation requires its key, so the data must list it.
-  await c.db.prepare("UPDATE organization_members SET status = status - 128 WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
-  const revoked = (await call(c, 'owner', 'GET', '/api/accounts/key-management/key-rotation-data')).json;
-  assert.equal(revoked.organizationPasswordResetKeyData.length, 1);
-  await c.db.prepare("UPDATE organization_members SET status = status + 128 WHERE organization_id = ? AND user_id = ?").bind(orgId, ID.owner).run();
-
   const data = (await call(c, 'owner', 'GET', '/api/accounts/key-management/key-rotation-data')).json;
-  assert.deepEqual(data.organizationPasswordResetKeyData, [
-    { organizationId: orgId, organizationName: 'Org', organizationPublicKey: 'org-pub', object: 'organizationPasswordResetKeyData' },
-  ]);
   assert.deepEqual(data.emergencyAccessKeyData, [
     { id: 'ea-keyed', granteeId: ID.member, granteeName: 'member', granteeEmail: 'member@example.test', publicKey: 'pub-member', object: 'emergencyAccessKeyData' },
   ]);
@@ -269,66 +241,32 @@ test('folders: POST /folders/{id} renames and POST /folders/{id}/delete deletes'
   assert.equal((await call(c, 'owner', 'GET', `/api/folders/${id}`)).status, 404);
 });
 
-test('purge: the personal vault, trash and folders go; organization items and other users stay', async () => {
+test('purge: the personal vault, trash and folders go; other users stay', async () => {
   const c = await setup();
-  const { orgId, collectionId } = await createOrg(c);
   const folder = (await call(c, 'owner', 'POST', '/api/folders', { name: enc('f') })).json.id as string;
   const kept = (await call(c, 'owner', 'POST', '/api/ciphers', login('kept', { folderId: folder }))).json.id as string;
   const trashed = (await call(c, 'owner', 'POST', '/api/ciphers', login('trashed'))).json.id as string;
   await call(c, 'owner', 'PUT', `/api/ciphers/${trashed}/delete`);
-  const orgCipher = (await call(c, 'owner', 'POST', '/api/ciphers/create', {
-    cipher: login('org', { organizationId: orgId }), collectionIds: [collectionId],
-  })).json.id as string;
   const others = (await call(c, 'member', 'POST', '/api/ciphers', login('others'))).json.id as string;
   assert.equal((await call(c, 'owner', 'POST', `/api/ciphers/${kept}/attachment`, legacyForm(enc('a.txt'), enc('k')))).status, 200);
   assert.equal(c.bucket.objects.size, 1);
 
   assert.equal((await call(c, 'owner', 'POST', '/api/ciphers/purge', { masterPasswordHash: 'wrong' })).status, 400);
-  assert.equal((await rows(c.db, 'SELECT id FROM ciphers WHERE user_id = ?', ID.owner)).length, 3);
+  assert.equal((await rows(c.db, 'SELECT id FROM ciphers WHERE user_id = ?', ID.owner)).length, 2);
 
   const res = await call(c, 'owner', 'POST', '/api/ciphers/purge', { masterPasswordHash: PASSWORD });
   assert.equal(res.status, 200, JSON.stringify(res.json));
-  assert.deepEqual((await rows(c.db, 'SELECT id FROM ciphers ORDER BY id')).map((r) => r.id).sort(), [orgCipher, others].sort());
+  assert.deepEqual((await rows(c.db, 'SELECT id FROM ciphers ORDER BY id')).map((r) => r.id), [others]);
   assert.equal((await rows(c.db, 'SELECT id FROM folders')).length, 0);
   assert.equal((await rows(c.db, 'SELECT id FROM attachments')).length, 0);
   assert.equal(c.bucket.objects.size, 0);
   const sync = (await call(c, 'owner', 'GET', '/api/sync')).json;
-  assert.deepEqual([sync.ciphers.map((x: any) => x.id), sync.folders], [[orgCipher], []]);
+  assert.deepEqual([sync.ciphers.map((x: any) => x.id), sync.folders], [[], []]);
 });
 
-test('purge ?organizationId=: only a confirmed owner empties the organization vault', async () => {
+test('legacy multipart attachments: /attachment', async () => {
   const c = await setup();
-  const { orgId, collectionId } = await createOrg(c);
-  const orgCipher = (await call(c, 'owner', 'POST', '/api/ciphers/create', {
-    cipher: login('org', { organizationId: orgId }), collectionIds: [collectionId],
-  })).json.id as string;
-  await call(c, 'owner', 'POST', `/api/ciphers/${orgCipher}/attachment`, legacyForm(enc('a.txt'), enc('k')));
-  const personal = (await call(c, 'owner', 'POST', '/api/ciphers', login('mine'))).json.id as string;
-  const purge = (actor: Actor, password = PASSWORD) =>
-    call(c, actor, 'POST', `/api/ciphers/purge?organizationId=${orgId}`, { masterPasswordHash: password });
-
-  assert.equal((await purge('outsider')).status, 404);
-  assert.equal((await purge('member')).status, 400);
-  assert.equal((await purge('owner', 'wrong')).status, 400);
-  assert.equal((await rows(c.db, 'SELECT id FROM ciphers WHERE organization_id = ?', orgId)).length, 1);
-
-  assert.equal((await purge('owner')).status, 200);
-  assert.deepEqual((await rows(c.db, 'SELECT id FROM ciphers')).map((r) => r.id), [personal]);
-  assert.equal((await rows(c.db, 'SELECT * FROM collection_ciphers')).length, 0);
-  assert.equal(c.bucket.objects.size, 0);
-  assert.deepEqual(
-    (await rows(c.db, 'SELECT type, acting_user_id FROM events WHERE organization_id = ? AND type = 1601', orgId)).map((r) => [r.type, r.acting_user_id]),
-    [[1601, ID.owner]]
-  );
-});
-
-test('legacy multipart attachments: /attachment, /attachment-admin and /attachment/{id}/share', async () => {
-  const c = await setup();
-  const { orgId, collectionId } = await createOrg(c);
   const personal = (await call(c, 'owner', 'POST', '/api/ciphers', login('p'))).json.id as string;
-  const orgCipher = (await call(c, 'owner', 'POST', '/api/ciphers/create', {
-    cipher: login('org', { organizationId: orgId }), collectionIds: [collectionId],
-  })).json.id as string;
 
   // The JSON v2 flow is unchanged.
   const v2 = await call(c, 'owner', 'POST', `/api/ciphers/${personal}/attachment`, { fileName: enc('v2'), key: enc('k'), fileSize: 3 });
@@ -340,27 +278,6 @@ test('legacy multipart attachments: /attachment, /attachment-admin and /attachme
   assert.deepEqual([old.key, old.size], [enc('old-key'), '5']);
   assert.equal(new TextDecoder().decode(c.bucket.objects.get(`${personal}/${old.id}`)), 'hello');
 
-  for (const [fileName, key] of [[null, enc('k')], [enc('f'), null]] as const) {
-    assert.equal((await call(c, 'owner', 'POST', `/api/ciphers/${personal}/attachment-admin`, legacyForm(fileName, key))).status, 400);
-  }
-  const admin = await call(c, 'member', 'POST', `/api/ciphers/${orgCipher}/attachment-admin`, legacyForm(enc('o.txt'), enc('ok')));
-  assert.equal(admin.status, 200, JSON.stringify(admin.json));
-  assert.equal(admin.json.organizationId, orgId);
-  assert.equal((await call(c, 'outsider', 'POST', `/api/ciphers/${orgCipher}/attachment-admin`, legacyForm(enc('x'), enc('x')))).status, 404);
-
-  // A rejected share keeps the old attachment; an accepted one replaces it.
-  const sharePath = `/api/ciphers/${personal}/attachment/${old.id}/share?organizationId=${orgId}`;
-  assert.equal((await call(c, 'owner', 'POST', sharePath, legacyForm(enc('new.txt'), null))).status, 400);
-  assert.equal((await call(c, 'member', 'POST', sharePath, legacyForm(enc('new.txt'), enc('new-key')))).status, 404);
-  assert.ok(c.bucket.objects.has(`${personal}/${old.id}`));
-  const shared = await call(c, 'owner', 'POST', sharePath, legacyForm(enc('new.txt'), enc('new-key'), 'reencrypted'));
-  assert.equal(shared.status, 200, JSON.stringify(shared.json));
-  const names = shared.json.attachments.map((a: any) => a.fileName);
-  assert.ok(names.includes(enc('new.txt')) && !names.includes(enc('old.txt')), JSON.stringify(names));
-  assert.ok(!c.bucket.objects.has(`${personal}/${old.id}`));
-  const replacement = shared.json.attachments.find((a: any) => a.fileName === enc('new.txt'));
-  assert.equal(new TextDecoder().decode(c.bucket.objects.get(`${personal}/${replacement.id}`)), 'reencrypted');
-  assert.equal((await call(c, 'owner', 'POST', `/api/ciphers/${personal}/attachment/${old.id}/share`, legacyForm(enc('n'), enc('k')))).status, 404);
 });
 
 test('upgrading a 2026-11-23-events database adds users.avatar_color and keeps users', async () => {

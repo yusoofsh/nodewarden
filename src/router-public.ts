@@ -13,7 +13,6 @@ import {
   handleFillAssistManifest,
 } from './handlers/fill-assist';
 import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
-import { handleOrganizationImport } from './handlers/organization-import';
 import { handleGetAccountPasskeyAssertionOptions } from './handlers/account-passkeys';
 import {
   handleRegister,
@@ -398,12 +397,6 @@ export async function handlePublicRoute(
     return handleGetAuthRequestResponse(request, env, authRequestResponseMatch[1]);
   }
 
-  // Authenticated by an organization API token, which the user routes behind this router refuse.
-  if (path === '/api/public/organization/import' && method === 'POST') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return blocked;
-    return handleOrganizationImport(request, env);
-  }
 
   if (path === '/identity/connect/token' && method === 'POST') {
     return handleToken(request, env);

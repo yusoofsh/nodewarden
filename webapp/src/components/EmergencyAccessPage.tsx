@@ -20,10 +20,10 @@ import {
   viewGrantorVault,
   type EmergencyAccessEntry,
 } from '@/lib/api/emergency-access';
-import { getUserPublicKey } from '@/lib/api/organizations';
+import { getUserPublicKey } from '@/lib/api/user-keys';
 import { decryptBw } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
-import { decryptText, importUserPrivateKey, sessionUserKey, unwrapKey, wrapKeyForPublicKey } from '@/lib/org-crypto';
+import { decryptText, importUserPrivateKey, sessionUserKey, unwrapKey, wrapKeyForPublicKey } from '@/lib/crypto-keys';
 import type { Profile, SessionState } from '@/lib/types';
 
 export interface EmergencyAccessPageProps {
@@ -37,9 +37,9 @@ export interface EmergencyAccessPageProps {
 const typeLabel = (type: number) => (type === EmergencyType.Takeover ? t('txt_ea_type_takeover') : t('txt_ea_type_view'));
 
 const STATUS_LABELS: Record<number, string> = {
-  [EmergencyStatus.Invited]: 'txt_org_status_invited',
-  [EmergencyStatus.Accepted]: 'txt_org_status_accepted',
-  [EmergencyStatus.Confirmed]: 'txt_org_status_confirmed',
+  [EmergencyStatus.Invited]: 'txt_ea_status_invited',
+  [EmergencyStatus.Accepted]: 'txt_ea_status_accepted',
+  [EmergencyStatus.Confirmed]: 'txt_ea_status_confirmed',
   [EmergencyStatus.RecoveryInitiated]: 'txt_ea_status_recovery_initiated',
   [EmergencyStatus.RecoveryApproved]: 'txt_ea_status_recovery_approved',
 };
@@ -94,7 +94,7 @@ export default function EmergencyAccessPage(props: EmergencyAccessPageProps) {
             const itemKey = await decryptBw(cipher.key, grantorKey.enc, grantorKey.mac).catch(() => null);
             if (itemKey && itemKey.length >= 64) key = { enc: itemKey.slice(0, 32), mac: itemKey.slice(32, 64) };
           }
-          return (await decryptText(cipher.name, key)) || t('txt_org_undecryptable');
+          return (await decryptText(cipher.name, key)) || t('txt_ea_undecryptable');
         })
       );
       setViewed({ email: entry.email, names });
@@ -148,7 +148,7 @@ export default function EmergencyAccessPage(props: EmergencyAccessPageProps) {
         {!loading && !entries?.length && (
           <tr>
             <td colSpan={5}>
-              <div className="empty empty-comfortable">{t('txt_org_none')}</div>
+              <div className="empty empty-comfortable">{t('txt_ea_none')}</div>
             </td>
           </tr>
         )}
@@ -232,7 +232,7 @@ export default function EmergencyAccessPage(props: EmergencyAccessPageProps) {
           <>
             {entry.status === EmergencyStatus.Invited && (
               <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(() => acceptAccess(authedFetch, entry.id), t('txt_ea_accepted'))}>
-                <Check size={14} className="btn-icon" /> {t('txt_org_accept')}
+                <Check size={14} className="btn-icon" /> {t('txt_ea_accept')}
               </button>
             )}
             {entry.status === EmergencyStatus.Confirmed && (

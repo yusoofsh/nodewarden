@@ -12,15 +12,9 @@ interface VaultSyncResponse {
 const pendingVaultCoreRequests = new Map<string, Promise<VaultCoreSnapshot>>();
 const memoryVaultCoreCache = new Map<string, { revisionStamp: number; snapshot: VaultCoreSnapshot }>();
 
-// This web vault holds no organization keys, so it cannot decrypt organization items; showing them
-// blank would invite an edit that re-encrypts one with the user key. They stay with the official clients.
-function personalOnly<T>(ciphers: T[]): T[] {
-  return ciphers.filter((cipher) => !(cipher as { organizationId?: unknown }).organizationId);
-}
-
 function normalizeSnapshot(body: VaultSyncResponse | null | undefined): VaultCoreSnapshot {
   return {
-    ciphers: Array.isArray(body?.ciphers) ? personalOnly(body!.ciphers!) : [],
+    ciphers: Array.isArray(body?.ciphers) ? body!.ciphers! : [],
     folders: Array.isArray(body?.folders) ? body!.folders! : [],
     sends: Array.isArray(body?.sends) ? body!.sends! : [],
   };
@@ -28,7 +22,7 @@ function normalizeSnapshot(body: VaultSyncResponse | null | undefined): VaultCor
 
 function normalizeCachedSnapshot(snapshot: Partial<VaultCoreSnapshot> | null | undefined): VaultCoreSnapshot {
   return {
-    ciphers: Array.isArray(snapshot?.ciphers) ? personalOnly(snapshot.ciphers) : [],
+    ciphers: Array.isArray(snapshot?.ciphers) ? snapshot.ciphers : [],
     folders: Array.isArray(snapshot?.folders) ? snapshot.folders : [],
     sends: Array.isArray(snapshot?.sends) ? snapshot.sends : [],
   };

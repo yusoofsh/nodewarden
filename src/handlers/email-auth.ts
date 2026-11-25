@@ -26,7 +26,7 @@ import {
   signRegisterToken,
   verifyRegisterToken,
 } from '../services/email-codes';
-import { LAST_ORGANIZATION_OWNER_ERROR, isLastActiveAdmin, purgeUser } from '../services/user-deletion';
+import { isLastActiveAdmin, purgeUser } from '../services/user-deletion';
 import { createRecoveryCode } from '../utils/recovery-code';
 import { generateUUID } from '../utils/uuid';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -339,7 +339,7 @@ async function deleteRecoverToken(request: Request, env: Env, storage: StorageSe
     return errorResponse('Invalid claim', 400);
   }
   if (await isLastActiveAdmin(storage, user)) return errorResponse('The last active admin cannot delete their own account', 400);
-  if (!(await purgeUser(env, storage, user))) return errorResponse(LAST_ORGANIZATION_OWNER_ERROR, 400);
+  await purgeUser(env, storage, user);
   await safeWriteAuditEvent(env, {
     actorUserId: null,
     action: 'account.delete.recover',

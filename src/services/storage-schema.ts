@@ -57,7 +57,6 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type INTEGER NOT NULL, folder_id TEXT, name TEXT, notes TEXT, ' +
   'favorite INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, reprompt INTEGER, key TEXT, ' +
   'created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT, ' +
-  'organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'ALTER TABLE ciphers ADD COLUMN archived_at TEXT',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at)',
@@ -181,78 +180,6 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope ON webauthn_challenges(user_id, scope)',
 
-  'CREATE TABLE IF NOT EXISTS organizations (' +
-  'id TEXT PRIMARY KEY, name TEXT NOT NULL, billing_email TEXT NOT NULL, private_key TEXT, public_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
-  'api_key TEXT, api_key_revision_date TEXT)',
-  // The organization API key an owner views and rotates. Like users.api_key it stays out of backups.
-  'ALTER TABLE organizations ADD COLUMN api_key TEXT',
-  'ALTER TABLE organizations ADD COLUMN api_key_revision_date TEXT',
-
-  'CREATE TABLE IF NOT EXISTS organization_members (' +
-  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, akey TEXT NOT NULL DEFAULT \'\', status INTEGER NOT NULL, type INTEGER NOT NULL, ' +
-  'access_all INTEGER NOT NULL DEFAULT 0, reset_password_key TEXT, external_id TEXT, v2_upgrade_token TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
-  'UNIQUE (organization_id, user_id), ' +
-  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, ' +
-  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members(user_id)',
-  // The directory id POST /api/public/organization/import matches members by.
-  'ALTER TABLE organization_members ADD COLUMN external_id TEXT',
-  // Set by a V1 to V2 upgrade on each membership enrolled in account recovery, until an admin re-wraps its key.
-  'ALTER TABLE organization_members ADD COLUMN v2_upgrade_token TEXT',
-
-  'CREATE TABLE IF NOT EXISTS collections (' +
-  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
-  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_collections_organization ON collections(organization_id)',
-
-  'CREATE TABLE IF NOT EXISTS collection_members (' +
-  'collection_id TEXT NOT NULL, member_id TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, hide_passwords INTEGER NOT NULL DEFAULT 0, manage INTEGER NOT NULL DEFAULT 0, ' +
-  'PRIMARY KEY (collection_id, member_id), ' +
-  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
-  'FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_collection_members_member ON collection_members(member_id)',
-
-  'CREATE TABLE IF NOT EXISTS organization_groups (' +
-  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
-  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_organization_groups_organization ON organization_groups(organization_id)',
-
-  'CREATE TABLE IF NOT EXISTS group_members (' +
-  'group_id TEXT NOT NULL, member_id TEXT NOT NULL, PRIMARY KEY (group_id, member_id), ' +
-  'FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE, ' +
-  'FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_group_members_member ON group_members(member_id)',
-
-  'CREATE TABLE IF NOT EXISTS collection_groups (' +
-  'collection_id TEXT NOT NULL, group_id TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, hide_passwords INTEGER NOT NULL DEFAULT 0, manage INTEGER NOT NULL DEFAULT 0, ' +
-  'PRIMARY KEY (collection_id, group_id), ' +
-  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
-  'FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_collection_groups_group ON collection_groups(group_id)',
-
-  'CREATE TABLE IF NOT EXISTS organization_policies (' +
-  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, type INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL DEFAULT \'null\', updated_at TEXT NOT NULL, ' +
-  'UNIQUE (organization_id, type), ' +
-  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
-
-  // An organization cipher has organization_id set; user_id stays NOT NULL and records who created it.
-  // Personal ciphers are the rows with no organization_id.
-  'ALTER TABLE ciphers ADD COLUMN organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE',
-  'CREATE INDEX IF NOT EXISTS idx_ciphers_organization ON ciphers(organization_id)',
-  'CREATE TABLE IF NOT EXISTS collection_ciphers (' +
-  'collection_id TEXT NOT NULL, cipher_id TEXT NOT NULL, ' +
-  'PRIMARY KEY (collection_id, cipher_id), ' +
-  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
-  'FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_collection_ciphers_cipher ON collection_ciphers(cipher_id)',
-  // Before this column existed, /api/ciphers/create stored a client organizationId in the cipher JSON and
-  // answered it back, so the creator's clients encrypted the item with the organization key. Adopt those
-  // rows into their organization when the creator is a confirmed member of it.
-  'UPDATE ciphers SET organization_id = lower(json_extract(data, \'$.organizationId\')) ' +
-  'WHERE organization_id IS NULL AND json_valid(data) AND json_type(data, \'$.organizationId\') = \'text\' ' +
-  'AND EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = lower(json_extract(ciphers.data, \'$.organizationId\')) ' +
-  'AND m.user_id = ciphers.user_id AND m.status = 2)',
-
   'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
   'ip TEXT PRIMARY KEY, attempts INTEGER NOT NULL, locked_until INTEGER, updated_at INTEGER NOT NULL)',
 
@@ -269,16 +196,6 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'FOREIGN KEY (grantee_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_emergency_access_pair ON emergency_access(grantor_id, grantee_id)',
   'CREATE INDEX IF NOT EXISTS idx_emergency_access_grantee ON emergency_access(grantee_id)',
-
-  // Organization event log, after Vaultwarden's event table. Only organization_id is a foreign key: an
-  // event outlives the cipher, member or user it names, and goes with its organization.
-  'CREATE TABLE IF NOT EXISTS events (' +
-  'id TEXT PRIMARY KEY, type INTEGER NOT NULL, organization_id TEXT NOT NULL, user_id TEXT, cipher_id TEXT, collection_id TEXT, ' +
-  'group_id TEXT, member_id TEXT, policy_id TEXT, acting_user_id TEXT, device_type INTEGER, ip_address TEXT, event_date TEXT NOT NULL, ' +
-  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
-  'CREATE INDEX IF NOT EXISTS idx_events_organization_date ON events(organization_id, event_date)',
-  'CREATE INDEX IF NOT EXISTS idx_events_cipher_date ON events(cipher_id, event_date)',
-  'CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date)',
 
   // Short-lived codes and link tokens sent by email, one per user and purpose. Only an HMAC of
   // the code is kept. Runtime state: not exported in backups.

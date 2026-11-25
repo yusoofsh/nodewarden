@@ -126,11 +126,6 @@ export const mailTemplates = {
     subject: 'Finish creating your account',
     text: `Open this link to verify your email address and finish creating your account:\n\n${link}\n\nThe link expires in 24 hours.${footer(origin)}`,
   }),
-  organizationInvite: (to: string, organizationName: string, origin: string): MailMessage => ({
-    to,
-    subject: `You have been invited to ${organizationName}`,
-    text: `You have been invited to join the organization "${organizationName}". Log in at ${origin} to accept the invitation.${footer(origin)}`,
-  }),
   emergencyAccessInvite: (to: string, grantor: string, origin: string): MailMessage => ({
     to,
     subject: 'You have been added as an emergency contact',

@@ -27,10 +27,6 @@ const USER = '50000000-0000-0000-0000-000000000001';
 const ADMIN = '50000000-0000-0000-0000-000000000002';
 const EMAIL = 'upgrade@example.test';
 const PASSWORD = 'master-hash';
-const ORG = '50000000-0000-0000-0000-0000000000a1';
-const OTHER_ORG = '50000000-0000-0000-0000-0000000000a2';
-const RECOVERY_MEMBER = '50000000-0000-0000-0000-0000000000b1';
-const PLAIN_MEMBER = '50000000-0000-0000-0000-0000000000b2';
 const FOLDER = '50000000-0000-0000-0000-0000000000c1';
 const CIPHERS = ['50000000-0000-0000-0000-0000000000d1', '50000000-0000-0000-0000-0000000000d2'];
 const SEND = '50000000-0000-0000-0000-0000000000e1';
@@ -77,12 +73,6 @@ async function setup() {
     maxAccessCount: null, accessCount: 0, disabled: false, hideEmail: null,
     createdAt: '2026-01-01', updatedAt: '2026-01-01', expirationDate: null, deletionDate: '2030-01-01T00:00:00.000Z',
   } as Send);
-  for (const org of [ORG, OTHER_ORG]) {
-    await db.prepare("INSERT INTO organizations(id, name, billing_email, private_key, public_key, created_at, updated_at) VALUES (?, 'o', 'b', ?, 'org-pub', '2026-01-01', '2026-01-01')").bind(org, v1('org-private')).run();
-    await db.prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, created_at, updated_at) VALUES (?, ?, ?, '4.adminorgkey', 2, 0, 1, '2026-01-01', '2026-01-01')").bind(crypto.randomUUID(), org, ADMIN).run();
-  }
-  await db.prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at) VALUES (?, ?, ?, '4.orgkey', 2, 2, 0, '4.v1recovery', '2026-01-01', '2026-01-01')").bind(RECOVERY_MEMBER, ORG, USER).run();
-  await db.prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, created_at, updated_at) VALUES (?, ?, ?, '4.otherorgkey', 2, 2, 0, '2026-01-01', '2026-01-01')").bind(PLAIN_MEMBER, OTHER_ORG, USER).run();
   return { db, env, storage };
 }
 type Ctx = Awaited<ReturnType<typeof setup>>;
@@ -145,7 +135,6 @@ function rotateUserKeys(over: Record<string, unknown> = {}, unlock: Record<strin
     wrappedAccountCryptographicState: cryptographicState(),
     unlockData: {
       emergencyAccessUnlockData: [],
-      organizationAccountRecoveryUnlockData: [{ organizationId: ORG, resetPasswordKey: null }],
       passkeyUnlockData: [],
       deviceKeyUnlockData: [],
       v2UpgradeToken: { wrappedUserKey1: v2('v1-wraps-v2'), wrappedUserKey2: v2('v2-wraps-v1') },
@@ -203,7 +192,7 @@ const v1AccountKeys = (privateKey: string, publicKey: string) => ({
   Object: 'privateKeys',
 });
 
-test('a V1 account upgrades in place to V2 and keeps its vault, memberships and password', async () => {
+test('a V1 account upgrades in place to V2 and keeps its vault and password', async () => {
   const c = await setup();
   const before = await call(c, 'GET', '/api/sync');
   assert.deepEqual(before.json.profile.accountKeys, v1AccountKeys(v1('private'), PUBLIC_KEY));
@@ -228,14 +217,6 @@ test('a V1 account upgrades in place to V2 and keeps its vault, memberships and 
   assert.deepEqual(sync.json.UserDecryption.V2UpgradeToken, { WrappedUserKey1: v2('v1-wraps-v2'), WrappedUserKey2: v2('v2-wraps-v1') });
   assert.deepEqual(sync.json.userDecryption.v2UpgradeToken, { wrappedUserKey1: v2('v1-wraps-v2'), wrappedUserKey2: v2('v2-wraps-v1') });
   assert.equal(sync.json.UserDecryption.UserKeyId, NEW_KEY_ID);
-  // Both memberships keep the organization key they hold; the recovery key stays until an admin re-wraps it.
-  assert.deepEqual(
-    await rows(c.db, 'SELECT id, akey, reset_password_key, v2_upgrade_token FROM organization_members WHERE user_id = ? ORDER BY id', USER),
-    [
-      { id: RECOVERY_MEMBER, akey: '4.orgkey', reset_password_key: '4.v1recovery', v2_upgrade_token: JSON.stringify({ wrappedUserKey1: v2('v1-wraps-v2'), wrappedUserKey2: v2('v2-wraps-v1') }) },
-      { id: PLAIN_MEMBER, akey: '4.otherorgkey', reset_password_key: null, v2_upgrade_token: null },
-    ]
-  );
   assert.deepEqual(await rows(c.db, 'SELECT user_id, signature_algorithm, signing_key, verifying_key FROM user_signature_key_pairs'), [
     { user_id: USER, signature_algorithm: 0, signing_key: v2('signing'), verifying_key: 'verifying-key' },
   ]);
@@ -249,36 +230,6 @@ test('a V1 account upgrades in place to V2 and keeps its vault, memberships and 
   assert.deepEqual(profile.json.accountKeys, V2_ACCOUNT_KEYS);
   const keys = await call(c, 'GET', `/api/users/${USER}/keys`, undefined, ADMIN);
   assert.deepEqual(keys.json, { publicKey: PUBLIC_KEY, signedPublicKey: 'signed-public-key', verifyingKey: 'verifying-key', object: 'publicKeys' });
-
-  // The admin re-wraps the recovery key with the member's V2 user key, which consumes the token.
-  const pending = await call(c, 'GET', `/api/organizations/${ORG}/users/keys/pending-v2-upgrades`, undefined, ADMIN);
-  assert.deepEqual(pending.json, {
-    object: 'list',
-    data: [{
-      object: 'organizationUserPendingV2Upgrade',
-      organizationUserId: RECOVERY_MEMBER,
-      userKeyId: NEW_KEY_ID,
-      accountRecoveryKey: '4.v1recovery',
-      v2UpgradeToken: { wrappedUserKey1: v2('v1-wraps-v2'), wrappedUserKey2: v2('v2-wraps-v1') },
-    }],
-    continuationToken: null,
-  });
-  const stale = await call(c, 'POST', `/api/organizations/${ORG}/users/keys/v2-upgrades`, {
-    upgrades: [{ organizationUserId: RECOVERY_MEMBER, userKeyId: 'b'.repeat(32), accountRecoveryKey: '4.djJyZWNvdmVyeQ==' }],
-  }, ADMIN);
-  assert.equal(stale.status, 200);
-  assert.equal((await rows(c.db, 'SELECT reset_password_key FROM organization_members WHERE id = ?', RECOVERY_MEMBER))[0].reset_password_key, '4.v1recovery');
-  assert.equal((await call(c, 'POST', `/api/organizations/${ORG}/users/keys/v2-upgrades`, {
-    upgrades: [{ organizationUserId: RECOVERY_MEMBER, userKeyId: NEW_KEY_ID, accountRecoveryKey: 'not-rsa' }],
-  }, ADMIN)).status, 400);
-  const applied = await call(c, 'POST', `/api/organizations/${ORG}/users/keys/v2-upgrades`, {
-    upgrades: [{ organizationUserId: RECOVERY_MEMBER, userKeyId: NEW_KEY_ID, accountRecoveryKey: '4.djJyZWNvdmVyeQ==' }],
-  }, ADMIN);
-  assert.equal(applied.status, 200);
-  assert.deepEqual(await rows(c.db, 'SELECT reset_password_key, v2_upgrade_token FROM organization_members WHERE id = ?', RECOVERY_MEMBER), [
-    { reset_password_key: '4.djJyZWNvdmVyeQ==', v2_upgrade_token: null },
-  ]);
-  assert.deepEqual((await call(c, 'GET', `/api/organizations/${ORG}/users/keys/pending-v2-upgrades`, undefined, ADMIN)).json.data, []);
 
   // The upgraded account keeps writing its vault with COSE (type 7) strings.
   const folder = await call(c, 'POST', '/api/folders', { name: v2('new-folder') });
@@ -309,41 +260,35 @@ test('a V1 account upgrades in place to V2 and keeps its vault, memberships and 
   assert.equal(isSerializedEncString(v2('passkey-public-key')), true);
 });
 
-test('a later V2 rotation clears the upgrade token, re-wraps recovery keys and keeps the verifying key', async () => {
+test('a later V2 rotation clears the upgrade token and keeps the verifying key', async () => {
   const c = await setup();
   assert.equal((await call(c, 'POST', '/api/accounts/key-management/rotate-user-keys', rotateUserKeys())).status, 200);
   const stampAfterUpgrade = (await c.storage.getUserById(USER))!.securityStamp;
   const ROTATED_KEY_ID = 'c'.repeat(32);
-  const next = (state: Record<string, unknown>, recoveryKey: string | null) => {
+  const next = (state: Record<string, unknown>) => {
     const body = rotateUserKeys({ newUserKeyId: ROTATED_KEY_ID, oldUserKeyId: NEW_KEY_ID }, {
       v2UpgradeToken: null,
-      organizationAccountRecoveryUnlockData: [{ organizationId: ORG, resetPasswordKey: recoveryKey }],
     }) as any;
     body.unlockMethodData.masterPasswordUnlockData.containedKeyId = ROTATED_KEY_ID;
     body.wrappedAccountCryptographicState = cryptographicState(state);
     return body;
   };
 
-  const otherVerifier = next({ signatureKeyPair: { signatureAlgorithm: 'ed25519', wrappedSigningKey: v2('signing-2'), verifyingKey: 'other' } }, '4.rotated');
+  const otherVerifier = next({ signatureKeyPair: { signatureAlgorithm: 'ed25519', wrappedSigningKey: v2('signing-2'), verifyingKey: 'other' } });
   assert.match((await call(c, 'POST', '/api/accounts/key-management/rotate-user-keys', otherVerifier)).json.error, /verifying key/);
-  assert.match((await call(c, 'POST', '/api/accounts/key-management/rotate-user-keys', next({}, null))).json.error, /cannot be null or empty/);
 
-  const rotated = next({ signatureKeyPair: { signatureAlgorithm: 'ed25519', wrappedSigningKey: v2('signing-2'), verifyingKey: 'verifying-key' } }, '4.rotated');
+  const rotated = next({ signatureKeyPair: { signatureAlgorithm: 'ed25519', wrappedSigningKey: v2('signing-2'), verifyingKey: 'verifying-key' } });
   assert.equal((await call(c, 'POST', '/api/accounts/key-management/rotate-user-keys', rotated)).status, 200);
   const user = (await c.storage.getUserById(USER))!;
   assert.equal(user.v2UpgradeToken, null);
   assert.equal(user.userKeyId, ROTATED_KEY_ID);
   assert.notEqual(user.securityStamp, stampAfterUpgrade);
   assert.equal(user.signatureKeyPair?.signingKey, v2('signing-2'));
-  assert.deepEqual(await rows(c.db, 'SELECT reset_password_key, v2_upgrade_token FROM organization_members WHERE id = ?', RECOVERY_MEMBER), [
-    { reset_password_key: '4.rotated', v2_upgrade_token: null },
-  ]);
   // A V2 account can't go back to V1 keys.
   const downgrade = await call(c, 'POST', '/api/accounts/key-management/rotate-user-account-keys', {
     oldMasterKeyAuthenticationHash: PASSWORD,
     accountUnlockData: {
       masterPasswordUnlockData: { kdfType: 0, kdfIterations: 600000, email: EMAIL, masterKeyAuthenticationHash: 'new', masterKeyEncryptedUserKey: v1('k') },
-      organizationAccountRecoveryUnlockData: [{ organizationId: ORG, resetPasswordKey: '4.again' }],
     },
     accountKeys: { userKeyEncryptedAccountPrivateKey: v1('private'), accountPublicKey: PUBLIC_KEY },
     accountData: rotateUserKeys().accountData,
@@ -355,7 +300,7 @@ test('invalid or partial V2 requests change nothing', async () => {
   const c = await setup();
   const snapshot = async () => JSON.stringify(await Promise.all([
     rows(c.db, 'SELECT * FROM users ORDER BY id'), rows(c.db, 'SELECT * FROM ciphers ORDER BY id'), rows(c.db, 'SELECT * FROM folders'),
-    rows(c.db, 'SELECT * FROM sends'), rows(c.db, 'SELECT * FROM organization_members ORDER BY id'), rows(c.db, 'SELECT * FROM user_signature_key_pairs'),
+    rows(c.db, 'SELECT * FROM sends'), rows(c.db, 'SELECT * FROM user_signature_key_pairs'),
   ]));
   const before = await snapshot();
   const base = rotateUserKeys() as any;
@@ -373,8 +318,6 @@ test('invalid or partial V2 requests change nothing', async () => {
     ['private key under a V1 user key', edit((b) => (b.wrappedAccountCryptographicState.publicKeyEncryptionKeyPair.wrappedPrivateKey = v1('private'))), /XChaCha20-Poly1305/],
     ['signing key under a V1 user key', edit((b) => (b.wrappedAccountCryptographicState.signatureKeyPair.wrappedSigningKey = v1('signing'))), /signing key/],
     ['other public key', edit((b) => (b.wrappedAccountCryptographicState.publicKeyEncryptionKeyPair.publicKey = 'attacker')), /asymmetric keypair/],
-    ['recovery key in an upgrade', edit((b) => (b.unlockData.organizationAccountRecoveryUnlockData[0].resetPasswordKey = '4.new')), /V1 to V2 upgrade/],
-    ['recovery entry left out', edit((b) => (b.unlockData.organizationAccountRecoveryUnlockData = [])), /reset password keys must be included/],
     ['missing cipher', edit((b) => b.accountData.ciphers.pop()), /All existing ciphers/],
     ['trusted device unlock', edit((b) => (b.unlockMethodData.unlockMethod = 0)), /Trusted device/],
     ['key connector unlock', edit((b) => (b.unlockMethodData.unlockMethod = 2)), /Key connector/],
@@ -395,7 +338,6 @@ test('invalid or partial V2 requests change nothing', async () => {
     oldMasterKeyAuthenticationHash: PASSWORD,
     accountUnlockData: {
       masterPasswordUnlockData: { kdfType: 0, kdfIterations: 600000, email: EMAIL, masterKeyAuthenticationHash: 'new', masterKeyEncryptedUserKey: v1('k') },
-      organizationAccountRecoveryUnlockData: [{ organizationId: ORG, resetPasswordKey: '4.again' }],
     },
     accountKeys: { userKeyEncryptedAccountPrivateKey: v1('private'), accountPublicKey: PUBLIC_KEY, securityState: { securityState: 's', securityVersion: 2 } },
     accountData: base.accountData,
@@ -499,7 +441,6 @@ test('a V1 account is unchanged: same accountKeys, and the V1 rotation still wor
     oldMasterKeyAuthenticationHash: PASSWORD,
     accountUnlockData: {
       masterPasswordUnlockData: { kdfType: 0, kdfIterations: 600000, email: EMAIL, masterKeyAuthenticationHash: 'new-hash', masterKeyEncryptedUserKey: v1('userkey-2') },
-      organizationAccountRecoveryUnlockData: [{ organizationId: ORG, resetPasswordKey: '4.rotated' }],
       // Never kept on this endpoint: it ends every session.
       v2UpgradeToken: { wrappedUserKey1: v2('a'), wrappedUserKey2: v2('b') },
     },
@@ -513,21 +454,7 @@ test('a V1 account is unchanged: same accountKeys, and the V1 rotation still wor
   assert.equal(rotation.status, 200, JSON.stringify(rotation.json));
   const user = (await c.storage.getUserById(USER))!;
   assert.deepEqual([user.privateKey, user.signedPublicKey, user.securityState, user.securityVersion, user.v2UpgradeToken, user.signatureKeyPair], [v1('private-2'), null, null, null, null, null]);
-  assert.deepEqual(await rows(c.db, 'SELECT reset_password_key, v2_upgrade_token FROM organization_members WHERE id = ?', RECOVERY_MEMBER), [
-    { reset_password_key: '4.rotated', v2_upgrade_token: null },
-  ]);
   assert.deepEqual((await call(c, 'GET', '/api/sync')).json.profile.accountKeys, v1AccountKeys(v1('private-2'), PUBLIC_KEY));
-});
-
-test('enrolling in account recovery again drops a pending upgrade token', async () => {
-  const c = await setup();
-  assert.equal((await call(c, 'POST', '/api/accounts/key-management/rotate-user-keys', rotateUserKeys())).status, 200);
-  await c.db.prepare("INSERT INTO organization_policies(id, organization_id, type, enabled, data, updated_at) VALUES ('p1', ?, 8, 1, '{}', '2026-01-01')").bind(ORG).run();
-  const enroll = await call(c, 'PUT', `/api/organizations/${ORG}/users/${USER}/reset-password-enrollment`, { resetPasswordKey: '4.fresh', masterPasswordHash: PASSWORD });
-  assert.equal(enroll.status, 200, JSON.stringify(enroll.json));
-  assert.deepEqual(await rows(c.db, 'SELECT reset_password_key, v2_upgrade_token FROM organization_members WHERE id = ?', RECOVERY_MEMBER), [
-    { reset_password_key: '4.fresh', v2_upgrade_token: null },
-  ]);
 });
 
 test('backups carry the V2 keys, the upgrade tokens and the signature key pair', async () => {
@@ -542,10 +469,6 @@ test('backups carry the V2 keys, the upgrade tokens and the signature key pair',
   const query = 'SELECT signed_public_key, security_state, security_version, v2_upgrade_token, private_key FROM users WHERE id = ?';
   assert.deepEqual(await rows(target, query, USER), await rows(c.db, query, USER));
   assert.deepEqual(await rows(target, 'SELECT * FROM user_signature_key_pairs'), await rows(c.db, 'SELECT * FROM user_signature_key_pairs'));
-  assert.deepEqual(
-    await rows(target, 'SELECT id, v2_upgrade_token FROM organization_members WHERE user_id = ? ORDER BY id', USER),
-    await rows(c.db, 'SELECT id, v2_upgrade_token FROM organization_members WHERE user_id = ? ORDER BY id', USER)
-  );
   const restored = await new StorageService(target).getUserById(USER);
   assert.equal(restored?.signatureKeyPair?.verifyingKey, 'verifying-key');
   assert.equal((await login(targetEnv)).json.AccountKeys.signatureKeyPair.verifyingKey, 'verifying-key');
@@ -559,8 +482,6 @@ test('a database created by the previous schema opens with the new build and kee
   await db.prepare("INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, security_stamp, role, created_at, updated_at) VALUES (?, ?, 'kept', ?, ?, ?, ?, 0, 600000, 's', 'admin', '2026-01-01', '2026-01-01')")
     .bind(USER, EMAIL, verifier, v1('userkey'), v1('private'), PUBLIC_KEY).run();
   await db.prepare("INSERT INTO ciphers(id, user_id, type, name, data, created_at, updated_at) VALUES (?, ?, 1, ?, '{}', '2026-01-01', '2026-01-01')").bind(CIPHERS[0], USER, v1('n')).run();
-  await db.prepare("INSERT INTO organizations(id, name, billing_email, created_at, updated_at) VALUES (?, 'o', 'b', '2026-01-01', '2026-01-01')").bind(ORG).run();
-  await db.prepare("INSERT INTO organization_members(id, organization_id, user_id, akey, status, type, access_all, reset_password_key, created_at, updated_at) VALUES (?, ?, ?, '4.orgkey', 2, 2, 0, '4.rec', '2026-01-01', '2026-01-01')").bind(RECOVERY_MEMBER, ORG, USER).run();
   const usersBefore = await rows(db, 'SELECT * FROM users');
   const ciphersBefore = await rows(db, 'SELECT * FROM ciphers');
 
@@ -572,7 +493,6 @@ test('a database created by the previous schema opens with the new build and kee
   for (const column of ['signed_public_key', 'security_state', 'security_version', 'v2_upgrade_token']) {
     assert.ok((await columns('users')).includes(column), column);
   }
-  assert.ok((await columns('organization_members')).includes('v2_upgrade_token'));
   assert.deepEqual(await columns('user_signature_key_pairs'), ['user_id', 'signature_algorithm', 'signing_key', 'verifying_key', 'created_at', 'updated_at']);
   assert.equal((await rows(db, "SELECT value FROM config WHERE key = 'schema.version'"))[0].value, STORAGE_SCHEMA_VERSION);
 
@@ -581,9 +501,29 @@ test('a database created by the previous schema opens with the new build and kee
   assert.equal(usersAfter.length, 1);
   for (const [column, value] of Object.entries(usersBefore[0])) assert.deepEqual(usersAfter[0][column], value, column);
   assert.deepEqual(await rows(db, 'SELECT * FROM ciphers'), ciphersBefore);
-  assert.deepEqual(await rows(db, 'SELECT akey, reset_password_key, v2_upgrade_token FROM organization_members'), [{ akey: '4.orgkey', reset_password_key: '4.rec', v2_upgrade_token: null }]);
   const env = { DB: db, JWT_SECRET: 'x'.repeat(40) } as unknown as Env;
   const token = await login(env);
   assert.equal(token.status, 200, JSON.stringify(token.json));
   assert.deepEqual(token.json.AccountKeys, v1AccountKeys(v1('private'), PUBLIC_KEY));
+});
+
+test('the organization migration drops every organization object and keeps the vault', async () => {
+  const db = createTestDb();
+  await db.exec(readFileSync(new URL('./fixtures/schema-2026-11-23-mail-duo-sso-org-api-key.sql', import.meta.url), 'utf8'));
+  await db.prepare("INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, security_stamp, role, created_at, updated_at) VALUES (?, ?, 'kept', 'v', ?, ?, ?, 0, 600000, 's', 'admin', '2026-01-01', '2026-01-01')")
+    .bind(USER, EMAIL, v1('userkey'), v1('private'), PUBLIC_KEY).run();
+  await db.prepare("INSERT INTO ciphers(id, user_id, type, name, data, created_at, updated_at) VALUES (?, ?, 1, ?, '{}', '2026-01-01', '2026-01-01')").bind(CIPHERS[0], USER, v1('n')).run();
+
+  await db.exec(readFileSync(new URL('../migrations/0002_drop_organizations.sql', import.meta.url), 'utf8'));
+
+  const tables = (await rows(db, "SELECT name FROM sqlite_master WHERE type = 'table'")).map((row) => row.name);
+  for (const table of ['organizations', 'organization_members', 'collections', 'collection_members', 'organization_groups', 'group_members', 'collection_groups', 'organization_policies', 'collection_ciphers', 'events']) {
+    assert.ok(!tables.includes(table), table);
+  }
+  const indexes = (await rows(db, "SELECT name FROM sqlite_master WHERE type = 'index'")).map((row) => row.name);
+  assert.ok(!indexes.includes('idx_ciphers_organization'));
+  const columns = (await rows(db, 'PRAGMA table_info(ciphers)')).map((row) => row.name);
+  assert.ok(!columns.includes('organization_id'));
+  assert.equal((await rows(db, 'SELECT id, user_id FROM ciphers')).length, 1);
+  assert.equal((await rows(db, 'SELECT id FROM users')).length, 1);
 });

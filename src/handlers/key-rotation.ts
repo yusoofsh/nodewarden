@@ -3,11 +3,9 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { applyKeyRotation } from '../services/storage-key-rotation-repo';
 import { listKeyedGrantorEmergencyAccess } from '../services/storage-emergency-access-repo';
-import { listAccountRecoveryMemberships } from '../services/storage-organization-repo';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { buildFullCipherUpdate, isValidEncString, optionalEncString, readIncomingAttachmentMetadata } from './ciphers';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { listMembershipsByUser, MemberStatus, REVOKED_ENROLLABLE_STATUSES } from '../services/storage-organization-repo';
 import { generateUUID } from '../utils/uuid';
 import {
   applyAccountKeys,
@@ -167,7 +165,7 @@ export async function handleRotateUserKeys(request: Request, env: Env, userId: s
 
 interface RotationInput {
   keys: ValidatedAccountKeys;
-  // emergencyAccessUnlockData, organizationAccountRecoveryUnlockData, passkeyUnlockData, deviceKeyUnlockData
+  // emergencyAccessUnlockData, passkeyUnlockData, deviceKeyUnlockData
   unlockRoot: Json;
   // ciphers, folders, sends
   data: Json;
@@ -245,8 +243,7 @@ async function rotateAccount(request: Request, env: Env, user: User, input: Rota
   const keysError = rotationKeysError(keys, user);
   if (keysError) return errorResponse(keysError, 400);
 
-  // An upgrade from V1 can't re-wrap the account recovery keys without the member trusting the
-  // organization's key, so they are kept and get the token an admin re-wraps them from.
+  // An upgrade from V1 keeps the upgrade token until a later rotation re-wraps what it names.
   const isUpgrade = input.upgradeToken !== null && !isV2User(user);
   const upgradeToken = isUpgrade ? input.upgradeToken : null;
 
@@ -273,12 +270,11 @@ async function rotateAccount(request: Request, env: Env, user: User, input: Rota
     devices.push({ deviceIdentifier: str(item.deviceId), encryptedUserKey, encryptedPublicKey });
   }
 
-  const [existingCiphers, existingFolders, existingSends, existingEmergencyAccess, existingAccountRecovery] = await Promise.all([
+  const [existingCiphers, existingFolders, existingSends, existingEmergencyAccess] = await Promise.all([
     storage.getAllCiphers(userId),
     storage.getAllFolders(userId),
     storage.getAllSends(userId),
     listKeyedGrantorEmergencyAccess(env.DB, userId),
-    listAccountRecoveryMemberships(env.DB, userId),
   ]);
 
   // Emergency contacts hold the user key wrapped with their public key. Every confirmed
@@ -297,30 +293,9 @@ async function rotateAccount(request: Request, env: Env, user: User, input: Rota
     emergencyAccess.push({ id: access.id, keyEncrypted });
   }
 
-  // Each organization the user enrolled in account recovery holds the user key wrapped with its public
-  // key. It must be re-wrapped too, or a recovery would install a user key that no longer exists.
-  const incomingRecoveryKeys = new Map<string, string>();
-  for (const item of asArray(unlockRoot.organizationAccountRecoveryUnlockData)) {
-    if (isRecord(item) && str(item.organizationId)) incomingRecoveryKeys.set(str(item.organizationId).toLowerCase(), str(item.resetPasswordKey));
-  }
-  const accountRecovery: Array<{ id: string; key: string | null }> = [];
-  for (const membership of existingAccountRecovery) {
-    if (!incomingRecoveryKeys.has(membership.organizationId)) {
-      return errorResponse('All existing reset password keys must be included in the rotation', 400);
-    }
-    const key = incomingRecoveryKeys.get(membership.organizationId)!;
-    if (isUpgrade) {
-      if (key) return errorResponse('Account recovery keys cannot be rotated during a V1 to V2 upgrade rotation.', 400);
-      accountRecovery.push({ id: membership.id, key: null });
-      continue;
-    }
-    if (!isWrappedKey(key)) return errorResponse('Account recovery keys cannot be null or empty during rotation.', 400);
-    accountRecovery.push({ id: membership.id, key });
-  }
-
   const incomingCiphers = new Map<string, Json>();
   for (const item of asArray(data.ciphers)) {
-    if (!isRecord(item) || item.organizationId) continue;
+    if (!isRecord(item)) continue;
     const id = str(item.id);
     if (!id) return errorResponse('The Id field is required.', 400);
     incomingCiphers.set(id, item);
@@ -413,7 +388,6 @@ async function rotateAccount(request: Request, env: Env, user: User, input: Rota
     folders,
     sends,
     emergencyAccess,
-    accountRecovery,
     signatureKeyPair: nextUser.signatureKeyPair ?? null,
     passkeys,
     devices,
@@ -448,20 +422,7 @@ async function rotateAccount(request: Request, env: Env, user: User, input: Rota
 // the rotation clears any row the client leaves out.
 export async function handleGetKeyRotationData(env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const [memberships, emergencyAccess] = await Promise.all([
-    // Revoked rows keep their earlier status minus an offset; they stay enrolled, so the rotation below requires their keys too.
-    listMembershipsByUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed, ...REVOKED_ENROLLABLE_STATUSES]),
-    listKeyedGrantorEmergencyAccess(env.DB, userId),
-  ]);
-
-  const organizationPasswordResetKeyData = memberships
-    .filter(({ member, organization }) => member.resetPasswordKey && organization.publicKey)
-    .map(({ organization }) => ({
-      organizationId: organization.id,
-      organizationName: organization.name,
-      organizationPublicKey: organization.publicKey,
-      object: 'organizationPasswordResetKeyData',
-    }));
+  const emergencyAccess = await listKeyedGrantorEmergencyAccess(env.DB, userId);
 
   const emergencyAccessKeyData = [];
   for (const access of emergencyAccess) {
@@ -478,7 +439,6 @@ export async function handleGetKeyRotationData(env: Env, userId: string): Promis
   }
 
   return jsonResponse({
-    organizationPasswordResetKeyData,
     emergencyAccessKeyData,
     trustedDeviceKeyData: [],
     passkeyKeyData: [],

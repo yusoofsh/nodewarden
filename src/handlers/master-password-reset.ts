@@ -1,5 +1,4 @@
-// Setting another user's master password: an emergency access takeover, or an organization admin's
-// account recovery. Both read the same request and end the same way.
+// Setting another user's master password during an emergency access takeover.
 import type { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';

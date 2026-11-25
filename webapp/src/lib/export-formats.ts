@@ -395,7 +395,7 @@ function trimNullKeys(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function filterExportableCiphers(ciphers: Cipher[]): Cipher[] {
-  return ciphers.filter((cipher) => !cipher.deletedDate && !(cipher as { organizationId?: unknown }).organizationId);
+  return ciphers.filter((cipher) => !cipher.deletedDate);
 }
 
 export async function buildPlainBitwardenJsonDocument(args: BuildPlainJsonArgs): Promise<Record<string, unknown>> {
