@@ -1,4 +1,4 @@
-// Key handling for organizations and emergency access, in Bitwarden's formats:
+// Key handling for emergency access, in Bitwarden's formats:
 // - A symmetric key is 64 bytes, an AES key then a MAC key, and strings it encrypts are type 2.
 // - A key wrapped for a user is RSA-OAEP SHA-1 over their SPKI public key, as `4.<base64>`.
 import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, toBufferSource } from './crypto';
@@ -62,25 +62,3 @@ export async function decryptText(value: string | null | undefined, key: Symmetr
   }
 }
 
-/** A new organization key, wrapped for its creator, and the organization's RSA key pair. */
-export async function createOrganizationKeys(creatorPublicKeyB64: string): Promise<{
-  orgKey: SymmetricKey;
-  wrappedForCreator: string;
-  publicKey: string;
-  encryptedPrivateKey: string;
-}> {
-  const orgKey = splitKey(crypto.getRandomValues(new Uint8Array(64)));
-  const pair = await crypto.subtle.generateKey(
-    { ...RSA, modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) },
-    true,
-    ['encrypt', 'decrypt']
-  );
-  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
-  return {
-    orgKey,
-    wrappedForCreator: await wrapKeyForPublicKey(orgKey, creatorPublicKeyB64),
-    publicKey: bytesToBase64(spki),
-    encryptedPrivateKey: await encryptBw(pkcs8, orgKey.enc, orgKey.mac),
-  };
-}

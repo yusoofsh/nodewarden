@@ -25,7 +25,6 @@ interface CipherRow {
   updated_at: string;
   archived_at: string | null;
   deleted_at: string | null;
-  organization_id: string | null;
 }
 
 const CIPHER_SCALAR_DATA_KEYS = new Set([
@@ -58,7 +57,7 @@ const CIPHER_SCALAR_DATA_KEYS = new Set([
   'deletedAt',
   'deleted_at',
   'deletedDate',
-  // Server-owned: the organization column, collection links and the caller's access flags.
+  // Server-owned: values only the server may set on the response.
   'organizationId',
   'organization_id',
   'collectionIds',
@@ -99,7 +98,6 @@ export function parseCipherRow(row: CipherRow | null | undefined): Cipher | null
       updatedAt: row.updated_at,
       archivedAt: row.archived_at ?? parsed.archivedAt ?? parsed.archivedDate ?? null,
       deletedAt: row.deleted_at ?? parsed.deletedAt ?? parsed.deletedDate ?? null,
-      organizationId: row.organization_id ?? null,
     };
   } catch {
     console.error('Corrupted cipher data, id:', row.id);
@@ -107,15 +105,14 @@ export function parseCipherRow(row: CipherRow | null | undefined): Cipher | null
   }
 }
 
-const CIPHER_COLUMNS = ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at', 'organization_id'];
+const CIPHER_COLUMNS = ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'];
 
 export function selectCipherColumns(alias = ''): string {
   return CIPHER_COLUMNS.map((column) => (alias ? `${alias}.${column}` : column)).join(', ');
 }
 
-// A personal cipher belongs to user_id and to no organization. Every user-scoped query here uses it:
-// on an organization cipher user_id only records the creator and grants nothing.
-const PERSONAL = 'user_id = ? AND organization_id IS NULL';
+// Every user-scoped query is limited to the caller's own ciphers.
+const PERSONAL = 'user_id = ?';
 
 export async function getCipher(db: D1Database, id: string): Promise<Cipher | null> {
   const row = await db
@@ -137,12 +134,12 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
   const folderId = normalizeOptionalId(cipher.folderId);
   const data = buildCipherData(cipher, folderId);
   const stmt = db.prepare(
-    'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at, organization_id) ' +
-    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
+    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
     'type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at ' +
-    // A save never moves a cipher between owners: sharing has its own statement.
-    'WHERE user_id=excluded.user_id AND organization_id IS excluded.organization_id'
+    // A save never moves a cipher between owners.
+    'WHERE user_id=excluded.user_id'
   );
   await safeBind(
     stmt,
@@ -159,8 +156,7 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     cipher.createdAt,
     cipher.updatedAt,
     cipher.archivedAt ?? null,
-    cipher.deletedAt,
-    cipher.organizationId ?? null
+    cipher.deletedAt
   ).run();
 }
 
@@ -176,11 +172,11 @@ export async function updateCipherIfUnchanged(
   const result = await safeBind(
     db.prepare(
       'UPDATE ciphers SET type=?, folder_id=?, name=?, notes=?, favorite=?, data=?, reprompt=?, key=?, updated_at=?, archived_at=?, deleted_at=? ' +
-      'WHERE id=? AND user_id=? AND organization_id IS ? AND updated_at=?'
+      'WHERE id=? AND user_id=? AND updated_at=?'
     ),
     Number(cipher.type) || 1, folderId, cipher.name, cipher.notes, cipher.favorite ? 1 : 0,
     buildCipherData(cipher, folderId), cipher.reprompt ?? 0, cipher.key, cipher.updatedAt,
-    cipher.archivedAt ?? null, cipher.deletedAt, cipher.id, cipher.userId, cipher.organizationId ?? null, expectedUpdatedAt
+    cipher.archivedAt ?? null, cipher.deletedAt, cipher.id, cipher.userId, expectedUpdatedAt
   ).run();
   return result.meta.changes === 1;
 }

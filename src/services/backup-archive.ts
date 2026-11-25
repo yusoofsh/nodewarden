@@ -43,10 +43,6 @@ export const EMERGENCY_ACCESS_COLUMNS = [
 ];
 export const SSO_USER_COLUMNS = ['issuer', 'subject', 'user_id', 'created_at'];
 export const USER_SIGNATURE_KEY_PAIR_COLUMNS = ['user_id', 'signature_algorithm', 'signing_key', 'verifying_key', 'created_at', 'updated_at'];
-export const EVENT_COLUMNS = [
-  'id', 'type', 'organization_id', 'user_id', 'cipher_id', 'collection_id', 'group_id', 'member_id', 'policy_id',
-  'acting_user_id', 'device_type', 'ip_address', 'event_date',
-];
 
 export interface BackupManifest {
   formatVersion: 1;
@@ -83,17 +79,7 @@ export interface BackupPayload {
     ciphers: SqlRow[];
     attachments: SqlRow[];
     webauthn_credentials?: SqlRow[];
-    organizations?: SqlRow[];
-    organization_members?: SqlRow[];
-    collections?: SqlRow[];
-    collection_members?: SqlRow[];
-    organization_groups?: SqlRow[];
-    group_members?: SqlRow[];
-    collection_groups?: SqlRow[];
-    organization_policies?: SqlRow[];
-    collection_ciphers?: SqlRow[];
     emergency_access?: SqlRow[];
-    events?: SqlRow[];
     sso_users?: SqlRow[];
     user_signature_key_pairs?: SqlRow[];
   };
@@ -302,17 +288,7 @@ function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
     ciphers: source.ciphers as SqlRow[],
     attachments: source.attachments as SqlRow[],
     webauthn_credentials: source.webauthn_credentials as SqlRow[] | undefined,
-    organizations: source.organizations as SqlRow[] | undefined,
-    organization_members: source.organization_members as SqlRow[] | undefined,
-    collections: source.collections as SqlRow[] | undefined,
-    collection_members: source.collection_members as SqlRow[] | undefined,
-    organization_groups: source.organization_groups as SqlRow[] | undefined,
-    group_members: source.group_members as SqlRow[] | undefined,
-    collection_groups: source.collection_groups as SqlRow[] | undefined,
-    organization_policies: source.organization_policies as SqlRow[] | undefined,
-    collection_ciphers: source.collection_ciphers as SqlRow[] | undefined,
     emergency_access: source.emergency_access as SqlRow[] | undefined,
-    events: source.events as SqlRow[] | undefined,
     sso_users: source.sso_users as SqlRow[] | undefined,
     user_signature_key_pairs: source.user_signature_key_pairs as SqlRow[] | undefined,
   };
@@ -419,10 +395,6 @@ export function validateBackupPayloadContents(
   const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
   const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
   const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
-  const organizationRows = ensureRowArray(payload.db.organizations || [], 'organizations');
-  const memberRows = ensureRowArray(payload.db.organization_members || [], 'organization_members');
-  const collectionRows = ensureRowArray(payload.db.collections || [], 'collections');
-  const collectionMemberRows = ensureRowArray(payload.db.collection_members || [], 'collection_members');
   const externalAttachmentKeys = new Set<string>(
     options.allowExternalAttachmentBlobs
       ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
@@ -513,108 +485,6 @@ export function validateBackupPayloadContents(
     accountPasskeyCredentialIds.add(credentialId);
   }
 
-  const organizationIds = new Set<string>();
-  for (const row of organizationRows) {
-    const id = String(row.id || '').trim();
-    if (!id || organizationIds.has(id)) throw new Error('Backup archive contains an invalid organization row');
-    organizationIds.add(id);
-  }
-
-  const memberIds = new Set<string>();
-  const memberPairs = new Set<string>();
-  for (const row of memberRows) {
-    const id = String(row.id || '').trim();
-    const pair = `${String(row.organization_id || '').trim()}/${String(row.user_id || '').trim()}`;
-    if (
-      !id || memberIds.has(id) || memberPairs.has(pair) ||
-      !organizationIds.has(String(row.organization_id || '').trim()) || !userIds.has(String(row.user_id || '').trim())
-    ) {
-      throw new Error('Backup archive contains an invalid organization member row');
-    }
-    memberIds.add(id);
-    memberPairs.add(pair);
-  }
-
-  const collectionIds = new Set<string>();
-  for (const row of collectionRows) {
-    const id = String(row.id || '').trim();
-    if (!id || collectionIds.has(id) || !organizationIds.has(String(row.organization_id || '').trim())) {
-      throw new Error('Backup archive contains an invalid collection row');
-    }
-    collectionIds.add(id);
-  }
-
-  const collectionMemberPairs = new Set<string>();
-  for (const row of collectionMemberRows) {
-    const collectionId = String(row.collection_id || '').trim();
-    const memberId = String(row.member_id || '').trim();
-    const pair = `${collectionId}/${memberId}`;
-    if (!collectionIds.has(collectionId) || !memberIds.has(memberId) || collectionMemberPairs.has(pair)) {
-      throw new Error('Backup archive contains an invalid collection member row');
-    }
-    collectionMemberPairs.add(pair);
-  }
-
-  // Optional: archives made before groups and policies existed have no such keys.
-  // A group's members and collections must belong to the group's organization.
-  const groupOrganization = new Map<string, string>();
-  for (const row of ensureRowArray(payload.db.organization_groups || [], 'organization_groups')) {
-    const id = String(row.id || '').trim();
-    const organizationId = String(row.organization_id || '').trim();
-    if (!id || groupOrganization.has(id) || !organizationIds.has(organizationId)) {
-      throw new Error('Backup archive contains an invalid organization group row');
-    }
-    groupOrganization.set(id, organizationId);
-  }
-  const memberOrganization = new Map(memberRows.map((row) => [String(row.id || '').trim(), String(row.organization_id || '').trim()]));
-  const collectionOrganization = new Map(collectionRows.map((row) => [String(row.id || '').trim(), String(row.organization_id || '').trim()]));
-  const groupLinkPairs = new Set<string>();
-  for (const [table, owners, column] of [
-    ['group_members', memberOrganization, 'member_id'],
-    ['collection_groups', collectionOrganization, 'collection_id'],
-  ] as const) {
-    for (const row of ensureRowArray(payload.db[table] || [], table)) {
-      const groupId = String(row.group_id || '').trim();
-      const otherId = String(row[column] || '').trim();
-      const pair = `${table}/${groupId}/${otherId}`;
-      if (!groupOrganization.has(groupId) || owners.get(otherId) !== groupOrganization.get(groupId) || groupLinkPairs.has(pair)) {
-        throw new Error(`Backup archive contains an invalid ${table} row`);
-      }
-      groupLinkPairs.add(pair);
-    }
-  }
-
-  const policyKeys = new Set<string>();
-  for (const row of ensureRowArray(payload.db.organization_policies || [], 'organization_policies')) {
-    const id = String(row.id || '').trim();
-    const key = `${String(row.organization_id || '').trim()}/${String(row.type ?? '').trim()}`;
-    if (!id || policyKeys.has(id) || policyKeys.has(key) || !organizationIds.has(String(row.organization_id || '').trim())) {
-      throw new Error('Backup archive contains an invalid organization policy row');
-    }
-    policyKeys.add(id);
-    policyKeys.add(key);
-  }
-
-  // Optional: archives made before organization ciphers have no organization_id and no links.
-  const cipherOrganizations = new Map<string, string>();
-  for (const row of cipherRows) {
-    const organizationId = row.organization_id == null ? '' : String(row.organization_id).trim();
-    if (!organizationId) continue;
-    if (!organizationIds.has(organizationId)) throw new Error('Backup archive contains a cipher for an unknown organization');
-    cipherOrganizations.set(String(row.id || '').trim(), organizationId);
-  }
-  const collectionCipherPairs = new Set<string>();
-  for (const row of ensureRowArray(payload.db.collection_ciphers || [], 'collection_ciphers')) {
-    const collectionId = String(row.collection_id || '').trim();
-    const cipherId = String(row.cipher_id || '').trim();
-    const pair = `${collectionId}/${cipherId}`;
-    const organizationId = cipherOrganizations.get(cipherId);
-    if (!organizationId || collectionOrganization.get(collectionId) !== organizationId || collectionCipherPairs.has(pair)) {
-      throw new Error('Backup archive contains an invalid collection cipher row');
-    }
-    collectionCipherPairs.add(pair);
-  }
-
   // Optional: archives made before emergency access existed have no such key.
   const emergencyAccessIds = new Set<string>();
   for (const row of ensureRowArray(payload.db.emergency_access || [], 'emergency_access')) {
@@ -625,17 +495,6 @@ export function validateBackupPayloadContents(
     }
     if (emergencyAccessIds.has(id)) throw new Error(`Backup archive contains duplicate emergency access id: ${id}`);
     emergencyAccessIds.add(id);
-  }
-
-  // Optional: archives made before the event log existed have no such key.
-  const eventIds = new Set<string>();
-  for (const row of ensureRowArray(payload.db.events || [], 'events')) {
-    const id = String(row.id || '').trim();
-    if (!id || !organizationIds.has(String(row.organization_id || '').trim())) {
-      throw new Error('Backup archive contains an invalid event row');
-    }
-    if (eventIds.has(id)) throw new Error(`Backup archive contains duplicate event id: ${id}`);
-    eventIds.add(id);
   }
 
   // Optional: archives made before SSO existed have no such key. One identity per account, one account per identity.
@@ -682,29 +541,17 @@ export async function buildBackupArchive(
   const encoder = new TextEncoder();
   const [
     configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows,
-    organizationRows, memberRows, collectionRows, collectionMemberRows, groupRows, groupMemberRows, collectionGroupRows, policyRows,
-    collectionCipherRows, emergencyAccessRows, eventRows, ssoUserRows, signatureKeyPairRows,
+    emergencyAccessRows, ssoUserRows, signatureKeyPairRows,
   ] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, duo_config, avatar_color, email_2fa, signed_public_key, security_state, security_version, v2_upgrade_token, created_at, updated_at FROM users ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT user_id, revision_date FROM user_revisions ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at, organization_id FROM ciphers ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT id, name, billing_email, private_key, public_key, created_at, updated_at FROM organizations ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, user_id, akey, status, type, access_all, reset_password_key, external_id, v2_upgrade_token, created_at, updated_at FROM organization_members ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM collections ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT collection_id, member_id, read_only, hide_passwords, manage FROM collection_members ORDER BY collection_id ASC, member_id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, name, external_id, created_at, updated_at FROM organization_groups ORDER BY created_at ASC, id ASC'),
-    queryRows(env.DB, 'SELECT group_id, member_id FROM group_members ORDER BY group_id ASC, member_id ASC'),
-    queryRows(env.DB, 'SELECT collection_id, group_id, read_only, hide_passwords, manage FROM collection_groups ORDER BY collection_id ASC, group_id ASC'),
-    queryRows(env.DB, 'SELECT id, organization_id, type, enabled, data, updated_at FROM organization_policies ORDER BY organization_id ASC, type ASC'),
-    queryRows(env.DB, 'SELECT collection_id, cipher_id FROM collection_ciphers ORDER BY collection_id ASC, cipher_id ASC'),
     queryRows(env.DB, `SELECT ${EMERGENCY_ACCESS_COLUMNS.join(', ')} FROM emergency_access ORDER BY created_at ASC`),
-    // Events are a bounded log, like audit_logs: left out of exports so a busy organization cannot produce an archive over the restore size limit.
-    Promise.resolve([] as SqlRow[]),
     queryRows(env.DB, `SELECT ${SSO_USER_COLUMNS.join(', ')} FROM sso_users ORDER BY created_at ASC, issuer ASC, subject ASC`),
     queryRows(env.DB, `SELECT ${USER_SIGNATURE_KEY_PAIR_COLUMNS.join(', ')} FROM user_signature_key_pairs ORDER BY user_id ASC`),
   ]);
@@ -735,17 +582,7 @@ export async function buildBackupArchive(
       ciphers: cipherRows.length,
       attachments: exportedAttachmentRows.length,
       webauthn_credentials: accountPasskeyRows.length,
-      organizations: organizationRows.length,
-      organization_members: memberRows.length,
-      collections: collectionRows.length,
-      collection_members: collectionMemberRows.length,
-      organization_groups: groupRows.length,
-      group_members: groupMemberRows.length,
-      collection_groups: collectionGroupRows.length,
-      organization_policies: policyRows.length,
-      collection_ciphers: collectionCipherRows.length,
       emergency_access: emergencyAccessRows.length,
-      events: eventRows.length,
       sso_users: ssoUserRows.length,
       user_signature_key_pairs: signatureKeyPairRows.length,
     },
@@ -771,17 +608,7 @@ export async function buildBackupArchive(
       ciphers: cipherRows,
       attachments: exportedAttachmentRows,
       webauthn_credentials: accountPasskeyRows,
-      organizations: organizationRows,
-      organization_members: memberRows,
-      collections: collectionRows,
-      collection_members: collectionMemberRows,
-      organization_groups: groupRows,
-      group_members: groupMemberRows,
-      collection_groups: collectionGroupRows,
-      organization_policies: policyRows,
-      collection_ciphers: collectionCipherRows,
       emergency_access: emergencyAccessRows,
-      events: eventRows,
       sso_users: ssoUserRows,
       user_signature_key_pairs: signatureKeyPairRows,
     }, null, BACKUP_JSON_INDENT)),

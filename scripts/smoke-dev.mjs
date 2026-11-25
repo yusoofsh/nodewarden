@@ -162,222 +162,16 @@ check('token is rejected after the stamp changes', (await call('GET', '/api/sync
 session = await login(email, 'hash-3');
 token = session.json?.access_token;
 
-// Organizations: create, rename, collections, sync, leave and delete.
-const org = await call('POST', '/api/organizations', {
-  token,
-  body: { name: 'Smoke org', billingEmail: email, collectionName: enc('default'), key: '4.b3JnLWtleQ==', planType: 0, keys: { encryptedPrivateKey: enc('orgpriv'), publicKey: 'b3JnLXB1Yg==' } },
-});
-check('create organization', org.status === 200 && org.json?.object === 'organization', `${org.status} ${org.text}`);
-const orgPath = `/api/organizations/${org.json?.id}`;
-const renamed = await call('PUT', orgPath, { token, body: { name: 'Smoke org 2', billingEmail: email } });
-check('rename organization', renamed.status === 200 && renamed.json?.name === 'Smoke org 2', `${renamed.status} ${renamed.text}`);
-const orgKey = await call('GET', `${orgPath}/public-key`, { token });
-check('organization public key', orgKey.json?.publicKey === 'b3JnLXB1Yg==', orgKey.text);
-const members = await call('GET', `${orgPath}/users`, { token });
-check('member list has the owner', members.json?.data?.length === 1 && members.json.data[0].type === 0 && members.json.data[0].status === 2, members.text);
-const coll = await call('POST', `${orgPath}/collections`, { token, body: { name: enc('team'), users: [], groups: [] } });
-check('create collection', coll.status === 200 && coll.json?.object === 'collectionDetails', `${coll.status} ${coll.text}`);
-const collUpdate = await call('PUT', `${orgPath}/collections/${coll.json?.id}`, { token, body: { name: enc('team2'), users: [], groups: [] } });
-check('update collection', collUpdate.status === 200 && collUpdate.json?.name === enc('team2'), `${collUpdate.status} ${collUpdate.text}`);
-const details = await call('GET', `${orgPath}/collections/details`, { token });
-check('collection details', details.json?.data?.length === 2 && details.json.data.every((c) => c.object === 'collectionAccessDetails'), details.text.slice(0, 300));
-const mine = await call('GET', '/api/collections', { token });
-check('GET /api/collections', mine.json?.data?.length === 2, mine.text.slice(0, 300));
-sync = await call('GET', '/api/sync', { token });
-check('sync lists the organization and its collections', sync.json?.profile?.organizations?.[0]?.id === org.json?.id && sync.json?.collections?.length === 2, sync.text.slice(0, 300));
-check('the last owner cannot leave', (await call('POST', `${orgPath}/leave`, { token })).status === 400);
-check('delete collection', (await call('DELETE', `${orgPath}/collections/${coll.json?.id}`, { token })).status === 200);
-check('delete organization needs the password', (await call('DELETE', orgPath, { token, body: { masterPasswordHash: 'wrong' } })).status === 400);
-check('delete organization', (await call('DELETE', orgPath, { token, body: { masterPasswordHash: 'hash-3' } })).status === 200);
-sync = await call('GET', '/api/sync', { token });
-check('sync no longer lists it', sync.json?.profile?.organizations?.length === 0 && sync.json?.collections?.length === 0, sync.text.slice(0, 300));
-check('deleted organization answers 404', (await call('GET', orgPath, { token })).status === 404);
-
+// Self-delete a second account.
 const invite = await call('POST', '/api/admin/invites', { token: session.json?.access_token, body: { masterPasswordHash: 'hash-3' } });
 check('admin creates an invite', invite.status === 201 && invite.json?.code, `${invite.status} ${invite.text}`);
 const second0 = await register(email2, 'hash-x', invite.json?.code);
 check('register second account', second0.status === 200, `${second0.status} ${second0.text}`);
 const second = await login(email2, 'hash-x');
 const secondToken = second.json?.access_token;
-const secondOrg = await call('POST', '/api/organizations', {
-  token: secondToken, body: { name: 'Second org', billingEmail: email2, collectionName: enc('default'), key: '4.b3JnLWtleQ==' },
-});
-const blocked = await call('POST', '/api/accounts/delete', { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
-check('the last owner of an organization cannot delete their account', blocked.status === 400 && /organization/.test(blocked.json?.error || ''), `${blocked.status} ${blocked.text}`);
-check('the other account cannot see that organization', (await call('GET', `/api/organizations/${secondOrg.json?.id}`, { token })).status === 404);
-
-// Members: invite the second account, accept from its session, confirm, change its role, remove it.
-const teamOrg = await call('POST', '/api/organizations', {
-  token, body: { name: 'Team org', billingEmail: email, collectionName: enc('default'), key: '4.b3JnLWtleQ==' },
-});
-const teamPath = `/api/organizations/${teamOrg.json?.id}`;
-check('unknown email cannot be invited', (await call('POST', `${teamPath}/users/invite`, { token, body: { emails: [`nobody-${run}@example.test`], type: 2 } })).status === 400);
-const inviteMember = await call('POST', `${teamPath}/users/invite`, { token, body: { emails: [email2], type: 2, collections: [], groups: [] } });
-check('invite an existing account', inviteMember.status === 200, `${inviteMember.status} ${inviteMember.text}`);
-const invitedRow = (await call('GET', `${teamPath}/users`, { token })).json?.data?.find((m) => m.email === email2.toLowerCase());
-check('the invitee is listed as invited', invitedRow?.status === 0, JSON.stringify(invitedRow));
-const pendingInvites = await call('GET', '/api/organizations/invitations', { token: secondToken });
-check('the invitee finds the invite to accept', pendingInvites.json?.data?.some((i) => i.id === invitedRow?.id && i.organizationId === teamOrg.json?.id), pendingInvites.text);
-const passwordPolicy = await call('PUT', `${teamPath}/policies/1`, { token, body: { policy: { enabled: true, data: { minLength: 14 } } } });
-check('store a master password policy', passwordPolicy.status === 200 && passwordPolicy.json?.enabled === true && passwordPolicy.json?.data?.minLength === 14, passwordPolicy.text);
-const tokenPolicies = await call('GET', `${teamPath}/policies/token?token=x&organizationUserId=${invitedRow?.id}`, { token: secondToken });
-check('the invitee reads the policies', tokenPolicies.json?.data?.[0]?.type === 1, `${tokenPolicies.status} ${tokenPolicies.text}`);
-check('the invitee reads no admin policy route', (await call('GET', `${teamPath}/policies`, { token: secondToken })).status === 404);
-check('the owner cannot accept for the invitee', (await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token, body: { token: 'x' } })).status === 404);
-const accepted = await call('POST', `${teamPath}/users/${invitedRow?.id}/accept`, { token: secondToken, body: { token: 'x' } });
-check('the invitee accepts', accepted.status === 200, `${accepted.status} ${accepted.text}`);
-const memberKeys = await call('POST', `${teamPath}/users/public-keys`, { token, body: { ids: [invitedRow?.id] } });
-check('invitee public key', memberKeys.json?.data?.[0]?.id === invitedRow?.id, memberKeys.text);
-const confirmed = await call('POST', `${teamPath}/users/${invitedRow?.id}/confirm`, { token, body: { key: '4.d3JhcHBlZA==' } });
-check('confirm the member', confirmed.status === 200, `${confirmed.status} ${confirmed.text}`);
-const memberSync = await call('GET', '/api/sync', { token: secondToken });
-check('the member syncs the organization', memberSync.json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id && o.status === 2), memberSync.text.slice(0, 300));
-check('the member syncs its policies', memberSync.json?.policies?.some((p) => p.organizationId === teamOrg.json?.id && p.type === 1), JSON.stringify(memberSync.json?.policies));
-const teamCollections = (body) => (body?.collections || []).filter((c) => c.organizationId === teamOrg.json?.id);
-check('the member sees no team collection yet', teamCollections(memberSync.json).length === 0, JSON.stringify(memberSync.json?.collections));
-const teamCollection = (await call('GET', `${teamPath}/collections`, { token })).json?.data?.[0];
-const group = await call('POST', `${teamPath}/groups`, {
-  token, body: { name: 'Readers', collections: [{ id: teamCollection?.id, readOnly: true, hidePasswords: false, manage: false }], users: [invitedRow?.id] },
-});
-check('create a group', group.status === 200 && group.json?.object === 'group', `${group.status} ${group.text}`);
-const groupDetails = await call('GET', `${teamPath}/groups/details`, { token });
-check('group details list its collection', groupDetails.json?.data?.[0]?.collections?.[0]?.id === teamCollection?.id, groupDetails.text);
-check('group members', JSON.stringify((await call('GET', `${teamPath}/groups/${group.json?.id}/users`, { token })).json) === JSON.stringify([invitedRow?.id]));
-const groupSync = await call('GET', '/api/sync', { token: secondToken });
-check('the group gives the member its collection', teamCollections(groupSync.json).length === 1 && teamCollections(groupSync.json)[0].readOnly === true, JSON.stringify(groupSync.json?.collections));
-check('delete the group', (await call('DELETE', `${teamPath}/groups/${group.json?.id}`, { token })).status === 200);
-check('the member loses the collection', teamCollections((await call('GET', '/api/sync', { token: secondToken })).json).length === 0);
-
-// Organization ciphers: create one in a collection, give the member read-only access, share a
-// personal cipher, move collections, list them for the admin console and delete them.
-const teamCollectionId = teamCollection?.id;
-const orgItem = await call('POST', '/api/ciphers/create', {
-  token,
-  body: { cipher: { type: 1, organizationId: teamOrg.json?.id, name: enc('org-item'), login: { username: enc('ou'), password: enc('op'), uris: [] } }, collectionIds: [teamCollectionId] },
-});
-check('create an organization cipher', orgItem.status === 200 && orgItem.json?.organizationId === teamOrg.json?.id && orgItem.json?.collectionIds?.[0] === teamCollectionId, `${orgItem.status} ${orgItem.text}`);
-check('the member cannot see it without a collection', !(await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.some((c) => c.id === orgItem.json?.id));
-const editors = await call('POST', `${teamPath}/groups`, {
-  token, body: { name: 'Editors', collections: [{ id: teamCollectionId, readOnly: false, hidePasswords: false, manage: false }], users: [invitedRow?.id] },
-});
-const groupItem = (await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.find((c) => c.id === orgItem.json?.id);
-check('a group collection gives the member the cipher', groupItem?.edit === true && groupItem?.viewPassword === true, JSON.stringify(groupItem));
-await call('DELETE', `${teamPath}/groups/${editors.json?.id}`, { token });
-await call('PUT', `${teamPath}/collections/${teamCollectionId}`, { token, body: { name: enc('default'), users: [{ id: invitedRow?.id, readOnly: true, hidePasswords: true, manage: false }], groups: [] } });
-const memberItem = (await call('GET', '/api/sync', { token: secondToken })).json?.ciphers?.find((c) => c.id === orgItem.json?.id);
-check('a read-only member syncs it without edit or passwords', memberItem?.edit === false && memberItem?.viewPassword === false, JSON.stringify(memberItem));
-const memberEdit = await call('PUT', `/api/ciphers/${orgItem.json?.id}`, { token: secondToken, body: { type: 1, organizationId: teamOrg.json?.id, name: enc('x'), login: {} } });
-check('a read-only member cannot edit it', memberEdit.status === 400, `${memberEdit.status} ${memberEdit.text}`);
-const personalItem = await call('POST', '/api/ciphers', { token, body: { type: 2, name: enc('to-share'), secureNote: { type: 0 } } });
-const shared = await call('PUT', `/api/ciphers/${personalItem.json?.id}/share`, {
-  token, body: { cipher: { type: 2, organizationId: teamOrg.json?.id, name: enc('shared'), secureNote: { type: 0 } }, collectionIds: [teamCollectionId] },
-});
-check('share a personal cipher', shared.status === 200 && shared.json?.organizationId === teamOrg.json?.id, `${shared.status} ${shared.text}`);
-const moved = await call('PUT', `/api/ciphers/${shared.json?.id}/collections-admin`, { token, body: { collectionIds: [] } });
-check('remove it from its collection', moved.status === 200 && moved.json?.collectionIds?.length === 0, `${moved.status} ${moved.text}`);
-const orgDetails = await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token });
-check('organization details list both', orgDetails.json?.data?.length === 2, orgDetails.text.slice(0, 300));
-check('the member cannot list organization details', (await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token: secondToken })).status === 400);
-check('trash an organization cipher as admin', (await call('PUT', `/api/ciphers/${shared.json?.id}/delete-admin`, { token })).status === 200);
-check('delete organization ciphers in bulk as admin', (await call('DELETE', '/api/ciphers/admin', { token, body: { ids: [orgItem.json?.id, shared.json?.id], organizationId: teamOrg.json?.id } })).status === 204);
-check('they are gone', (await call('GET', `/api/ciphers/organization-details?organizationId=${teamOrg.json?.id}`, { token })).json?.data?.length === 0);
-const eventRange = `?start=2000-01-01T00:00:00.000Z&end=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`;
-const collected = await call('POST', '/events/collect', { token: secondToken, body: [{ type: 1602, organizationId: teamOrg.json?.id, date: new Date().toISOString() }] });
-check('a member reports a client event', collected.status === 200, `${collected.status} ${collected.text}`);
-const orgEventList = await call('GET', `${teamPath}/events${eventRange}`, { token });
-const eventTypes = new Set((orgEventList.json?.data || []).map((e) => e.type));
-check('the event log records organization, group and cipher changes', [1100, 1102, 1105, 1106, 1400, 1402, 1500, 1602].every((t) => eventTypes.has(t)), orgEventList.text.slice(0, 300));
-const ownEvent = (orgEventList.json?.data || []).find((e) => e.type === 1400);
-check('an event names the acting user, device type and IP', ownEvent?.actingUserId && ownEvent?.deviceType === 9 && ownEvent?.ipAddress === '198.51.100.7', JSON.stringify(ownEvent));
-check('a member cannot read the event log', (await call('GET', `${teamPath}/events${eventRange}`, { token: secondToken })).status === 400);
-check('the member event log lists their invite', (await call('GET', `${teamPath}/users/${invitedRow?.id}/events${eventRange}`, { token })).json?.data?.some((e) => e.type === 1500));
-// Organization admin routes: keys, revoke and restore, collection access, import, export, bulk
-// collections, the API key, account recovery and the static billing routes.
-check('GET /api/plans', (await call('GET', '/api/plans', { token })).json?.data?.length === 2);
-check('billing warnings', (await call('GET', `${teamPath}/billing/vnext/warnings`, { token: secondToken })).json?.freeTrial === null);
-check('self-host billing metadata', (await call('GET', `${teamPath}/billing/vnext/self-host/metadata`, { token })).json?.organizationOccupiedSeats === 0);
-check('no pending v2 upgrades', (await call('GET', `${teamPath}/users/keys/pending-v2-upgrades`, { token })).json?.data?.length === 0);
-const teamKeys = await call('POST', `${teamPath}/keys`, { token, body: { encryptedPrivateKey: enc('teampriv'), publicKey: 'dGVhbS1wdWI=' } });
-check('set the organization keys once', teamKeys.status === 200 && (await call('POST', `${teamPath}/keys`, { token, body: { encryptedPrivateKey: enc('x'), publicKey: 'eA==' } })).status === 400, teamKeys.text);
-check('read the organization private key', (await call('GET', `${teamPath}/private-key`, { token })).json?.privateKey === enc('teampriv'));
-check('revoke the member', (await call('PUT', `${teamPath}/users/${invitedRow?.id}/revoke`, { token })).status === 200);
-const revokedSync = await call('GET', '/api/sync', { token: secondToken });
-check('a revoked member loses the organization', !revokedSync.json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id), revokedSync.text.slice(0, 300));
-const mini = await call('GET', `${teamPath}/users/mini-details`, { token });
-check('mini details show the member revoked', mini.json?.data?.find((m) => m.id === invitedRow?.id)?.status === -1, mini.text);
-const restoredMember = await call('PUT', `${teamPath}/users/restore`, { token, body: { ids: [invitedRow?.id] } });
-check('restore the member', restoredMember.json?.data?.[0]?.error === '', restoredMember.text);
-check('the restored member is confirmed again', (await call('GET', '/api/sync', { token: secondToken })).json?.profile?.organizations?.some((o) => o.id === teamOrg.json?.id && o.status === 2));
-const bulkAccess = await call('POST', `${teamPath}/collections/bulk-access`, {
-  token, body: { collectionIds: [teamCollectionId], users: [{ id: invitedRow?.id, readOnly: false, hidePasswords: false, manage: true }], groups: [] },
-});
-check('bulk collection access', bulkAccess.status === 200, `${bulkAccess.status} ${bulkAccess.text}`);
-const collectionUsers = await call('GET', `${teamPath}/collections/${teamCollectionId}/users`, { token });
-check('collection users', collectionUsers.json?.[0]?.id === invitedRow?.id && collectionUsers.json[0].manage === true, collectionUsers.text);
-check('collection details by id', (await call('GET', `${teamPath}/collections/${teamCollectionId}/details`, { token })).json?.object === 'collectionAccessDetails');
-const imported = await call('POST', `/api/ciphers/import-organization?organizationId=${teamOrg.json?.id}`, {
-  token: secondToken,
-  body: { ciphers: [{ type: 2, name: enc('imported'), secureNote: { type: 0 } }], collections: [{ id: teamCollectionId, name: enc('default') }], collectionRelationships: [{ key: 0, value: 0 }] },
-});
-check('a collection manager imports into it', imported.status === 200, `${imported.status} ${imported.text}`);
-const assigned = await call('GET', `/api/ciphers/organization-details/assigned?organizationId=${teamOrg.json?.id}`, { token: secondToken });
-const importedId = assigned.json?.data?.[0]?.id;
-check('the member lists the assigned cipher', assigned.json?.data?.length === 1, assigned.text.slice(0, 300));
-const extra = await call('POST', `${teamPath}/collections`, { token, body: { name: enc('extra'), users: [], groups: [] } });
-check('bulk add a collection', (await call('POST', '/api/ciphers/bulk-collections', { token, body: { organizationId: teamOrg.json?.id, cipherIds: [importedId], collectionIds: [extra.json?.id], removeCollections: false } })).status === 200);
-const exported = await call('GET', `${teamPath}/export`, { token });
-check('the export lists the collections and the cipher in both', exported.json?.collections?.length === 2 && exported.json?.ciphers?.[0]?.collectionIds?.length === 2, exported.text.slice(0, 300));
-check('delete collections in bulk', (await call('DELETE', `${teamPath}/collections`, { token, body: { ids: [extra.json?.id] } })).status === 200);
-const apiKey = await call('POST', `${teamPath}/api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
-check('organization API key', apiKey.json?.object === 'apiKey' && apiKey.json?.apiKey?.length === 30, apiKey.text);
-const orgLogin = (secret) => call('POST', '/identity/connect/token', {
-  form: { grant_type: 'client_credentials', client_id: `organization.${teamOrg.json?.id}`, client_secret: secret, scope: 'api.organization' },
-});
-const oldOrgToken = (await orgLogin(apiKey.json?.apiKey)).json?.access_token;
-check('log in with the organization API key', typeof oldOrgToken === 'string', '');
-const rotatedKey = await call('POST', `${teamPath}/rotate-api-key`, { token, body: { masterPasswordHash: 'hash-3' } });
-check('rotate the organization API key', rotatedKey.json?.apiKey !== apiKey.json?.apiKey);
-check('the old organization key no longer logs in', (await orgLogin(apiKey.json?.apiKey)).status === 400);
-check('a token from the old key is refused', (await call('POST', '/api/public/organization/import', { token: oldOrgToken, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
-const orgToken = (await orgLogin(rotatedKey.json?.apiKey)).json?.access_token;
-check('the organization token cannot sync a vault', (await call('GET', '/api/sync', { token: orgToken })).status === 401);
-check('the organization token cannot list members', (await call('GET', `${teamPath}/users`, { token: orgToken })).status === 401);
-check('a user token cannot run the directory import', (await call('POST', '/api/public/organization/import', { token, body: { members: [], groups: [], overwriteExisting: false, largeImport: false } })).status === 401);
-const directoryImport = await call('POST', '/api/public/organization/import', {
-  token: orgToken,
-  body: {
-    members: [{ email: email2, externalId: `ext-${run}`, deleted: false }, { email: `nobody-${run}@example.test`, externalId: `ext-nobody-${run}`, deleted: false }],
-    groups: [{ name: `Directory ${run}`, externalId: `grp-${run}`, memberExternalIds: [`ext-${run}`] }],
-    overwriteExisting: false,
-    largeImport: false,
-  },
-});
-check('the directory import runs', directoryImport.status === 200, `${directoryImport.status} ${directoryImport.text}`);
-const directoryGroup = (await call('GET', `${teamPath}/groups`, { token })).json?.data?.find((g) => g.externalId === `grp-${run}`);
-check('the import creates the group with the member', directoryGroup && JSON.stringify((await call('GET', `${teamPath}/groups/${directoryGroup.id}/users`, { token })).json) === JSON.stringify([invitedRow?.id]), JSON.stringify(directoryGroup));
-await call('DELETE', `${teamPath}/groups/${directoryGroup?.id}`, { token });
-check('enable account recovery', (await call('PUT', `${teamPath}/policies/8`, { token, body: { policy: { enabled: true, data: { autoEnrollEnabled: false } } } })).status === 200);
-check('auto-enroll status', (await call('GET', `${teamPath}/auto-enroll-status`, { token: secondToken })).json?.resetPasswordEnabled === false);
-const enrolled = await call('PUT', `${teamPath}/users/${(await call('GET', '/api/accounts/profile', { token: secondToken })).json?.id}/reset-password-enrollment`, {
-  token: secondToken, body: { resetPasswordKey: '4.cmVjb3Zlcnk=', masterPasswordHash: 'hash-x' },
-});
-check('the member enrolls in account recovery', enrolled.status === 200, `${enrolled.status} ${enrolled.text}`);
-const resetDetails = await call('GET', `${teamPath}/users/${invitedRow?.id}/reset-password-details`, { token });
-check('reset password details', resetDetails.json?.resetPasswordKey === '4.cmVjb3Zlcnk=' && resetDetails.json?.encryptedPrivateKey === enc('teampriv'), resetDetails.text);
-const recovered = await call('PUT', `${teamPath}/users/${invitedRow?.id}/recover-account`, {
-  token, body: { resetMasterPassword: true, resetTwoFactor: false, newMasterPasswordHash: 'hash-y', key: enc('recovered-key') },
-});
-check('recover the member account', recovered.status === 200, `${recovered.status} ${recovered.text}`);
-check('the old member password no longer logs in', (await login(email2, 'hash-x')).status !== 200);
-const recoveredToken = (await login(email2, 'hash-y')).json?.access_token;
-check('the member logs in with the new password', !!recoveredToken);
-check('promote the member to admin', (await call('PUT', `${teamPath}/users/${invitedRow?.id}`, { token, body: { type: 1, collections: [], groups: [] } })).status === 200);
-check('remove the member', (await call('DELETE', `${teamPath}/users/${invitedRow?.id}`, { token })).status === 200);
-await call('DELETE', teamPath, { token, body: { masterPasswordHash: 'hash-3' } });
-await call('DELETE', `/api/organizations/${secondOrg.json?.id}`, { token: recoveredToken, body: { masterPasswordHash: 'hash-y' } });
-const deleted = await call('POST', '/api/accounts/delete', { token: recoveredToken, body: { masterPasswordHash: 'hash-y' } });
+const deleted = await call('POST', '/api/accounts/delete', { token: secondToken, body: { masterPasswordHash: 'hash-x' } });
 check('delete own account', deleted.status === 200, `${deleted.status} ${deleted.text}`);
-check('deleted account cannot log in', (await login(email2, 'hash-y')).status !== 200);
+check('deleted account cannot log in', (await login(email2, 'hash-x')).status !== 200);
 
 // Emergency access: the first account grants takeover to a third, which takes it over.
 // Runs last because it changes the first account's password.
@@ -463,7 +257,6 @@ const upgrade = await call('POST', '/api/accounts/key-management/rotate-user-key
     },
     unlockData: {
       emergencyAccessUnlockData: [],
-      organizationAccountRecoveryUnlockData: (upgradeData.json?.organizationPasswordResetKeyData || []).map((o) => ({ organizationId: o.organizationId, resetPasswordKey: null })),
       passkeyUnlockData: [],
       deviceKeyUnlockData: [],
       v2UpgradeToken: { wrappedUserKey1: v2('token-1'), wrappedUserKey2: v2('token-2') },

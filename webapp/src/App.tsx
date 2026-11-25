@@ -123,7 +123,6 @@ const APP_ROUTE_PATHS = [
   '/settings',
   SETTINGS_ACCOUNT_ROUTE,
   SETTINGS_DOMAIN_RULES_ROUTE,
-  '/organizations',
   '/emergency-access',
   '/help',
   ...IMPORT_ROUTE_PATHS,
@@ -1978,7 +1977,6 @@ export default function App() {
     if (location === LEGACY_DEVICE_MANAGEMENT_ROUTE || location === DEVICE_MANAGEMENT_ROUTE) return t('nav_device_management');
     if (location === SETTINGS_DOMAIN_RULES_ROUTE) return t('nav_domain_rules');
     if (location === '/backup') return t('nav_backup_strategy');
-    if (location === '/organizations') return t('nav_organizations');
     if (location === '/emergency-access') return t('nav_emergency_access');
     if (isImportRoute) return t('nav_import_export');
     if (location === SETTINGS_ACCOUNT_ROUTE) return t('nav_account_settings');

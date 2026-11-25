@@ -174,7 +174,7 @@ and webhook token in **Secrets** (`npx wrangler secret put RESEND_API_KEY`), nev
 
 With mail configured, the server serves email two-step login, email change, account deletion by
 emailed link, verification codes for protected actions, and email verification, and it emails a
-notice for organization and emergency access invites. Registration stays invite-only: a sign-up
+notice for emergency access invites. Registration stays invite-only: a sign-up
 link is only mailed while the server has no users. If mail is turned off later, accounts that use
 email two-step login need their recovery code. See `VAULTWARDEN_PARITY.md` for details.
 

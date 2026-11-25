@@ -13,9 +13,6 @@ export interface KeyRotationPlan {
   sends: Array<{ id: string; key: string }>;
   // The user key wrapped for each confirmed emergency contact.
   emergencyAccess: Array<{ id: string; keyEncrypted: string }>;
-  // The user key wrapped for each organization the user enrolled in account recovery, by membership id.
-  // A null key keeps the stored one (a V1 to V2 upgrade); each row's v2_upgrade_token becomes user.v2UpgradeToken.
-  accountRecovery: Array<{ id: string; key: string | null }>;
   // The V2 signature key pair to store, or null for a V1 rotation.
   signatureKeyPair: UserSignatureKeyPair | null;
   // Copies of the user key wrapped for a passkey or a trusted device. Rows that are
@@ -66,8 +63,7 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
         'UPDATE users SET master_password_hash=?, key=?, private_key=?, public_key=?, user_key_id=?, security_stamp=?, ' +
         'signed_public_key=?, security_state=?, security_version=?, v2_upgrade_token=?, updated_at=? ' +
         "WHERE id=? AND master_password_hash=? AND security_stamp=? AND status='active' " +
-        // Organization ciphers are encrypted with the organization key, so a rotation leaves them alone.
-        'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ? AND organization_id IS NULL) = ? ' +
+        'AND (SELECT COUNT(*) FROM ciphers WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM folders WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM sends WHERE user_id = ?) = ? ' +
         'AND (SELECT COUNT(*) FROM emergency_access WHERE grantor_id = ? AND status >= 2 AND key_encrypted IS NOT NULL) = ?'
@@ -115,16 +111,6 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
         .bind(plan.now, chunk, user.id, ...guardArgs)
     );
   }
-  for (const membership of plan.accountRecovery) {
-    statements.push(
-      db
-        .prepare(
-          'UPDATE organization_members SET reset_password_key = COALESCE(?, reset_password_key), v2_upgrade_token = ?, updated_at = ? ' +
-          'WHERE id = ? AND user_id = ?' + guard
-        )
-        .bind(membership.key, user.v2UpgradeToken ?? null, plan.now, membership.id, user.id, ...guardArgs)
-    );
-  }
   if (plan.signatureKeyPair) {
     const pair = plan.signatureKeyPair;
     statements.push(
@@ -149,7 +135,7 @@ export async function applyKeyRotation(db: D1Database, plan: KeyRotationPlan): P
           "json_extract(value, '$.data') AS data, json_extract(value, '$.reprompt') AS reprompt, json_extract(value, '$.key') AS key, " +
           "json_extract(value, '$.updated_at') AS updated_at, json_extract(value, '$.archived_at') AS archived_at, " +
           "json_extract(value, '$.deleted_at') AS deleted_at FROM json_each(?)) AS j " +
-          'WHERE ciphers.id = j.id AND ciphers.user_id = ? AND ciphers.organization_id IS NULL' + guard
+          'WHERE ciphers.id = j.id AND ciphers.user_id = ?' + guard
         )
         .bind(chunk, user.id, ...guardArgs)
     );

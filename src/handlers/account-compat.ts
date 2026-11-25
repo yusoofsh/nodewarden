@@ -3,7 +3,7 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { isLastActiveAdmin, LAST_ORGANIZATION_OWNER_ERROR, purgeUser } from '../services/user-deletion';
+import { isLastActiveAdmin, purgeUser } from '../services/user-deletion';
 import { generateUUID } from '../utils/uuid';
 import { isV2User } from '../utils/account-keys';
 
@@ -65,7 +65,7 @@ export async function handleGetUserPublicKey(env: Env, targetUserId: string, wit
 }
 
 // GET /api/tasks
-// Security tasks are an organization feature; personal accounts have none.
+// Security tasks are a Bitwarden organization feature; this server has none.
 export function handleGetTasks(): Response {
   return jsonResponse({ data: [], object: 'list', continuationToken: null });
 }
@@ -111,7 +111,7 @@ export async function handleDeleteOwnAccount(request: Request, env: Env, userId:
     return errorResponse('The last active admin cannot delete their own account', 400);
   }
 
-  if (!(await purgeUser(env, storage, user))) return errorResponse(LAST_ORGANIZATION_OWNER_ERROR, 400);
+  await purgeUser(env, storage, user);
   await safeWriteAuditEvent(env, {
     actorUserId: null,
     action: 'account.delete',

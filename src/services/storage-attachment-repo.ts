@@ -28,8 +28,7 @@ export async function saveAttachment(db: D1Database, safeBind: SafeBind, attachm
     'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key ' +
     'WHERE EXISTS (' +
     'SELECT 1 FROM ciphers current_cipher INNER JOIN ciphers next_cipher ON next_cipher.id = excluded.cipher_id ' +
-    'WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = next_cipher.user_id ' +
-    'AND current_cipher.organization_id IS next_cipher.organization_id' +
+    'WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = next_cipher.user_id' +
     ')'
   );
   await safeBind(stmt, attachment.id, attachment.cipherId, attachment.fileName, attachment.size, attachment.sizeName, attachment.key).run();
@@ -114,7 +113,7 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
       `SELECT a.id, a.cipher_id, a.file_name, a.size, a.size_name, a.key
        FROM attachments a
        INNER JOIN ciphers c ON c.id = a.cipher_id
-       WHERE c.user_id = ? AND c.organization_id IS NULL`
+       WHERE c.user_id = ?`
     )
     .bind(userId)
     .all<any>();

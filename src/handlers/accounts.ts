@@ -13,7 +13,6 @@ import { buildAccountKeys } from '../utils/user-decryption';
 import { applyAccountKeys, encStringType, isV2User, validateAccountKeys, type ValidatedAccountKeys } from '../utils/account-keys';
 import { saveSignatureKeyPair, setUserKeyId } from '../services/storage-user-repo';
 import { buildProfileResponse } from '../utils/profile-response';
-import { listProfileMemberships } from '../services/storage-organization-repo';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -585,8 +584,7 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
 
 async function profileResponse(env: Env, storage: StorageService, user: User): Promise<Response> {
   const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-  const memberships = await listProfileMemberships(env.DB, user.id);
-  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey, memberships }));
+  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey }));
 }
 
 // PUT /api/accounts/avatar

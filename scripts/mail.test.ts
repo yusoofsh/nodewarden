@@ -129,9 +129,7 @@ test('with mail unconfigured every mail route still answers 501 and nothing is s
     const res = kind === 'auth' ? await call(c, 'member', method, path, body) : await publicCall(c, path, body);
     assert.equal(res.status, 501, `${method} ${path}`);
   }
-  // Invites behave as before: no mail.
-  const org = await call(c, 'owner', 'POST', '/api/organizations', { name: 'Org', billingEmail: 'o@example.test', collectionName: '2.c|a|b', key: '4.k' });
-  assert.equal((await call(c, 'owner', 'POST', `/api/organizations/${org.json.id}/users/invite`, { emails: ['member@example.test'], type: 2, accessAll: true })).status, 200);
+  // Emergency access invites behave as before: no mail.
   assert.equal((await call(c, 'owner', 'POST', '/api/emergency-access/invite', { email: 'member@example.test', type: 0, waitTimeDays: 7 })).status, 200);
   assert.equal(sent.length, 0);
 });
@@ -164,8 +162,8 @@ test('the webhook and Resend receive the message, and the subject cannot carry l
   assert.equal(sent[0].headers.authorization, 'Bearer re_test');
   assert.deepEqual(sent[0].body.to, ['member@example.test']);
 
-  const org = await call(r, 'owner', 'POST', '/api/organizations', { name: 'Evil\r\nBcc: x@y.z', billingEmail: 'o@example.test', collectionName: '2.c|a|b', key: '4.k' });
-  await call(r, 'owner', 'POST', `/api/organizations/${org.json.id}/users/invite`, { emails: ['member@example.test'], type: 2, accessAll: true });
+  const emergency = await call(r, 'owner', 'POST', '/api/emergency-access/invite', { email: 'member@example.test', type: 0, waitTimeDays: 7 });
+  assert.equal(emergency.status, 200);
   assert.doesNotMatch(sent.at(-1)!.body.subject, /[\r\n]/);
 });
 
@@ -330,12 +328,8 @@ test('registration by email stays closed once an account exists, and works for t
   assert.equal((await publicCall(empty, '/identity/accounts/register/verification-email-clicked', { email: 'first@example.test', emailVerificationToken: verificationToken })).status, 400);
 });
 
-test('organization and emergency access invites send a notice when mail is configured', async () => {
+test('an emergency access invite sends a notice when mail is configured', async () => {
   const c = await setup();
-  const org = await call(c, 'owner', 'POST', '/api/organizations', { name: 'Org', billingEmail: 'o@example.test', collectionName: '2.c|a|b', key: '4.k' });
-  assert.equal((await call(c, 'owner', 'POST', `/api/organizations/${org.json.id}/users/invite`, { emails: ['member@example.test'], type: 2, accessAll: true })).status, 200);
-  assert.equal(sent.at(-1)!.body.to, 'member@example.test');
-  assert.match(sent.at(-1)!.body.subject, /Org/);
   assert.equal((await call(c, 'owner', 'POST', '/api/emergency-access/invite', { email: 'member@example.test', type: 0, waitTimeDays: 7 })).status, 200);
   assert.equal(sent.at(-1)!.body.to, 'member@example.test');
   assert.match(sent.at(-1)!.body.text, /owner@example\.test/);

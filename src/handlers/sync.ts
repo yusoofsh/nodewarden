@@ -11,10 +11,6 @@ import {
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
-import { collectionDetailsJson, policyJson } from '../utils/organization-response';
-import { listCollectionsForUser, listProfileMemberships, MemberStatus } from '../services/storage-organization-repo';
-import { listPoliciesForUser } from '../services/storage-organization-policy-repo';
-import { listOrgCiphersForUser } from '../services/storage-org-cipher-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -85,15 +81,12 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return cachedResponse;
   }
 
-  const [ciphers, orgCiphers, folders, sends, attachmentsByCipher, domainSettings, memberships, collections] = await Promise.all([
+  const [ciphers, folders, sends, attachmentsByCipher, domainSettings] = await Promise.all([
     storage.getAllCiphers(userId),
-    listOrgCiphersForUser(env.DB, userId),
     storage.getAllFolders(userId),
     excludeSends ? Promise.resolve([]) : storage.getAllSends(userId),
     storage.getAttachmentsByUserId(userId),
     excludeDomains ? Promise.resolve(null) : storage.getUserDomainSettings(userId),
-    listProfileMemberships(env.DB, userId),
-    listCollectionsForUser(env.DB, userId),
   ]);
   const webAuthnPrfOptions = accountPasskeys
     .map(buildWebAuthnPrfOption)
@@ -103,10 +96,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
 
   const profile: ProfileResponse = buildProfileResponse(user, env, {
     hasTwoFactorPasskey: twoFactorPasskeys.length > 0,
-    memberships,
   });
 
-  const orgAttachments = await storage.getAttachmentsByCipherIds(orgCiphers.map(({ cipher }) => cipher.id));
   const cipherResponses: CipherResponse[] = [];
   for (const cipher of ciphers) {
     const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris, validFolderIds });
@@ -114,13 +105,6 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
       cipherResponses.push(response);
     }
   }
-  for (const { cipher, access, collectionIds } of orgCiphers) {
-    const response = cipherToResponse(cipher, orgAttachments.get(cipher.id) || [], { preserveRepairableUris, access, collectionIds });
-    if (isCipherResponseSyncCompatible(response)) {
-      cipherResponses.push(response);
-    }
-  }
-
   const folderResponses: FolderResponse[] = [];
   for (const folder of folders) {
     folderResponses.push({
@@ -140,7 +124,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const syncResponse: SyncResponse = {
     profile,
     folders: folderResponses,
-    collections: collections.map(({ collection, member, access }) => collectionDetailsJson(collection, member, access)),
+    collections: [],
     ciphers: cipherResponses,
     domains: excludeDomains
       ? null
@@ -150,9 +134,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
           domainSettings?.excludedGlobalEquivalentDomains || [],
           { omitExcludedGlobals: true }
         ),
-    // As in Vaultwarden: policies of confirmed memberships, and of accepted ones too in policiesNew.
-    policies: (await listPoliciesForUser(env.DB, userId, [MemberStatus.Confirmed])).map(policyJson),
-    policiesNew: (await listPoliciesForUser(env.DB, userId, [MemberStatus.Accepted, MemberStatus.Confirmed])).map(policyJson),
+    policies: [],
+    policiesNew: [],
     sends: sendResponses,
     UserDecryption: {
       MasterPasswordUnlock: userDecryptionOptions.MasterPasswordUnlock,

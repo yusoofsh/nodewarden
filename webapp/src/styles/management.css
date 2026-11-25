@@ -2267,33 +2267,7 @@
   }
 }
 
-/* Organizations and emergency access */
-.org-tabs {
-  margin-bottom: 12px;
-  overflow-x: auto;
-}
-
-.org-check-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-}
-
-.org-row-selected td {
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-
-.org-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--primary-strong);
-  background: color-mix(in srgb, var(--primary) 12%, var(--panel));
-}
-
+/* Emergency access */
 .ea-view-list {
   margin: 0;
   padding-left: 20px;

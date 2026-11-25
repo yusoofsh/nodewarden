@@ -89,8 +89,6 @@ CREATE TABLE IF NOT EXISTS ciphers (
   updated_at TEXT NOT NULL,
   archived_at TEXT,
   deleted_at TEXT,
-  -- Set for an organization cipher; user_id then records who created it.
-  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at);
@@ -303,124 +301,6 @@ CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires
 CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope
   ON webauthn_challenges(user_id, scope);
 
--- Organizations
-CREATE TABLE IF NOT EXISTS organizations (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  billing_email TEXT NOT NULL,
-  private_key TEXT,
-  public_key TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  api_key TEXT,
-  api_key_revision_date TEXT
-);
-
--- status: 0 invited, 1 accepted, 2 confirmed; a revoked member keeps its status minus 128 (clients see -1). type: 0 owner, 1 admin, 2 user, 4 custom.
-CREATE TABLE IF NOT EXISTS organization_members (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  akey TEXT NOT NULL DEFAULT '',
-  status INTEGER NOT NULL,
-  type INTEGER NOT NULL,
-  access_all INTEGER NOT NULL DEFAULT 0,
-  reset_password_key TEXT,
-  external_id TEXT,
-  v2_upgrade_token TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (organization_id, user_id),
-  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_organization_members_user
-  ON organization_members(user_id);
-
-CREATE TABLE IF NOT EXISTS collections (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  external_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_collections_organization
-  ON collections(organization_id);
-
-CREATE TABLE IF NOT EXISTS collection_members (
-  collection_id TEXT NOT NULL,
-  member_id TEXT NOT NULL,
-  read_only INTEGER NOT NULL DEFAULT 0,
-  hide_passwords INTEGER NOT NULL DEFAULT 0,
-  manage INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (collection_id, member_id),
-  FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
-  FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_collection_members_member
-  ON collection_members(member_id);
-CREATE INDEX IF NOT EXISTS idx_ciphers_organization
-  ON ciphers(organization_id);
-
-CREATE TABLE IF NOT EXISTS collection_ciphers (
-  collection_id TEXT NOT NULL,
-  cipher_id TEXT NOT NULL,
-  PRIMARY KEY (collection_id, cipher_id),
-  FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
-  FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_collection_ciphers_cipher
-  ON collection_ciphers(cipher_id);
-
-CREATE TABLE IF NOT EXISTS organization_groups (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  external_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_organization_groups_organization
-  ON organization_groups(organization_id);
-
-CREATE TABLE IF NOT EXISTS group_members (
-  group_id TEXT NOT NULL,
-  member_id TEXT NOT NULL,
-  PRIMARY KEY (group_id, member_id),
-  FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE,
-  FOREIGN KEY (member_id) REFERENCES organization_members(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_group_members_member
-  ON group_members(member_id);
-
-CREATE TABLE IF NOT EXISTS collection_groups (
-  collection_id TEXT NOT NULL,
-  group_id TEXT NOT NULL,
-  read_only INTEGER NOT NULL DEFAULT 0,
-  hide_passwords INTEGER NOT NULL DEFAULT 0,
-  manage INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (collection_id, group_id),
-  FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
-  FOREIGN KEY (group_id) REFERENCES organization_groups(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_collection_groups_group
-  ON collection_groups(group_id);
-
--- type: Bitwarden's PolicyType. data: the policy's JSON, stored as the client sent it.
-CREATE TABLE IF NOT EXISTS organization_policies (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  type INTEGER NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 0,
-  data TEXT NOT NULL DEFAULT 'null',
-  updated_at TEXT NOT NULL,
-  UNIQUE (organization_id, type),
-  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
-);
-
 -- Rate limiting
 CREATE TABLE IF NOT EXISTS login_attempts_ip (
   ip TEXT PRIMARY KEY,
@@ -457,30 +337,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_emergency_access_pair
 CREATE INDEX IF NOT EXISTS idx_emergency_access_grantee
   ON emergency_access(grantee_id);
 
--- Organization event log. Only organization_id is a foreign key: an event outlives the cipher,
--- member or user it names, and goes with its organization.
-CREATE TABLE IF NOT EXISTS events (
-  id TEXT PRIMARY KEY,
-  type INTEGER NOT NULL,
-  organization_id TEXT NOT NULL,
-  user_id TEXT,
-  cipher_id TEXT,
-  collection_id TEXT,
-  group_id TEXT,
-  member_id TEXT,
-  policy_id TEXT,
-  acting_user_id TEXT,
-  device_type INTEGER,
-  ip_address TEXT,
-  event_date TEXT NOT NULL,
-  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_events_organization_date
-  ON events(organization_id, event_date);
-CREATE INDEX IF NOT EXISTS idx_events_cipher_date
-  ON events(cipher_id, event_date);
-CREATE INDEX IF NOT EXISTS idx_events_date
-  ON events(event_date);
 
 -- Short-lived codes and link tokens sent by email. Runtime state: not exported in backups.
 CREATE TABLE IF NOT EXISTS email_codes (
