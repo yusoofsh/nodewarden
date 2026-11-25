@@ -1,15 +1,17 @@
 import type { Env } from '../types';
 import { normalizeBackupEndpointUrl } from './backup-config';
 
-// Outbound mail over HTTP. Workers cannot open SMTP connections, so a message goes to
-// Resend (RESEND_API_KEY) or to a webhook relay (MAIL_WEBHOOK_URL) that receives
-// {from, to, subject, text, html} as JSON. Mail is off unless MAIL_FROM and one of the
-// two are set; every mail-backed route then answers as it did before mail existed.
+// Outbound mail. A message goes to Resend (RESEND_API_KEY), to a webhook relay
+// (MAIL_WEBHOOK_URL) that receives {from, to, subject, text, html} as JSON, or to
+// Cloudflare Email Sending through the EMAIL send_email binding, in that order.
+// Mail is off unless MAIL_FROM and one provider are set; every mail-backed route then
+// answers as it did before mail existed.
 // Never log message bodies, codes or credentials.
 
 export type MailProvider =
   | { kind: 'resend'; apiKey: string }
-  | { kind: 'webhook'; url: string; token: string | null };
+  | { kind: 'webhook'; url: string; token: string | null }
+  | { kind: 'cloudflare'; binding: SendEmail };
 
 export interface MailConfig {
   from: string;
@@ -42,7 +44,7 @@ export function mailConfig(env: Env): MailConfig | null {
   const apiKey = (env.RESEND_API_KEY || '').trim();
   if (apiKey) return { from, provider: { kind: 'resend', apiKey } };
   const rawUrl = (env.MAIL_WEBHOOK_URL || '').trim();
-  if (!rawUrl) return null;
+  if (!rawUrl) return env.EMAIL ? { from, provider: { kind: 'cloudflare', binding: env.EMAIL } } : null;
   const url = normalizeMailWebhookUrl(rawUrl);
   if (!url) {
     console.warn('Mail disabled: MAIL_WEBHOOK_URL must be a public https URL');
@@ -62,12 +64,30 @@ function textToHtml(text: string): string {
   return `<!doctype html><html><body><p>${body}</p></body></html>`;
 }
 
+// The binding takes a bare address or {email, name}; MAIL_FROM may be "Name <address>".
+export function bindingSender(from: string): string | EmailAddress {
+  const match = /^\s*"?([^"<]*?)"?\s*<([^<>\s]+)>\s*$/.exec(from);
+  if (!match) return from;
+  return match[1] ? { email: match[2], name: match[1] } : match[2];
+}
+
 // Returns whether the provider accepted the message.
 export async function sendMail(config: MailConfig, message: MailMessage): Promise<boolean> {
   // No line breaks in headers: a relay may turn the subject into an SMTP header.
   const subject = message.subject.replace(/[\r\n]+/g, ' ');
   const payload = { from: config.from, to: message.to, subject, text: message.text, html: textToHtml(message.text) };
   const { provider } = config;
+  if (provider.kind === 'cloudflare') {
+    try {
+      await provider.binding.send({ ...payload, from: bindingSender(config.from) });
+      return true;
+    } catch (error) {
+      // E_RECIPIENT_PLAN_RESTRICTED here means a Workers Free account and an unverified recipient.
+      const code = (error as { code?: unknown } | null)?.code;
+      console.warn('Mail provider refused a message', { provider: provider.kind, code: typeof code === 'string' ? code : 'unknown' });
+      return false;
+    }
+  }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (provider.kind === 'resend') headers.Authorization = `Bearer ${provider.apiKey}`;
   else if (provider.token) headers.Authorization = `Bearer ${provider.token}`;

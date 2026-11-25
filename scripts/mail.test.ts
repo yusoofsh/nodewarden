@@ -8,7 +8,7 @@ import { createPasswordVerifier } from '../src/services/password-verifier';
 import { handleAuthenticatedRoute } from '../src/router-authenticated';
 import { handlePublicRoute } from '../src/router-public';
 import { handleToken } from '../src/handlers/identity';
-import { mailConfig } from '../src/services/mail';
+import { bindingSender, mailConfig } from '../src/services/mail';
 import { RateLimitService } from '../src/services/ratelimit';
 import { obscureEmail } from '../src/services/email-codes';
 import { createTestDb } from './lib/d1-sqlite';
@@ -144,6 +144,41 @@ test('mail config needs MAIL_FROM and a provider, and a webhook must be public h
   }
   assert.deepEqual(mailConfig(env(WEBHOOK))?.provider, { kind: 'webhook', url: 'https://relay.example.test/send', token: 'relay-secret' });
   assert.equal(mailConfig(env({ ...WEBHOOK, RESEND_API_KEY: 're_x' }))?.provider.kind, 'resend');
+  const EMAIL = { send: async () => ({ messageId: 'm' }) };
+  assert.equal(mailConfig({ EMAIL } as unknown as Env), null, 'binding without sender');
+  assert.equal(mailConfig({ MAIL_FROM: 'a@b.c', EMAIL } as unknown as Env)?.provider.kind, 'cloudflare');
+  assert.equal(mailConfig({ ...WEBHOOK, EMAIL } as unknown as Env)?.provider.kind, 'webhook', 'an HTTP provider wins');
+});
+
+test('MAIL_FROM becomes the sender shape the Email Sending binding takes', () => {
+  assert.equal(bindingSender('vault@example.test'), 'vault@example.test');
+  assert.equal(bindingSender('<vault@example.test>'), 'vault@example.test');
+  assert.deepEqual(bindingSender('Vault <vault@example.test>'), { email: 'vault@example.test', name: 'Vault' });
+  assert.deepEqual(bindingSender('"My Vault" <vault@example.test>'), { email: 'vault@example.test', name: 'My Vault' });
+});
+
+test('the Email Sending binding receives the message, and a refusal answers 502', async () => {
+  const c = await setup(null);
+  const messages: Array<Record<string, unknown>> = [];
+  let refuse: string | null = null;
+  Object.assign(c.env, {
+    MAIL_FROM: 'Vault <vault@example.test>',
+    EMAIL: {
+      send: async (message: Record<string, unknown>) => {
+        if (refuse) throw Object.assign(new Error('refused'), { code: refuse });
+        messages.push(message);
+        return { messageId: 'm1' };
+      },
+    },
+  });
+  assert.equal((await call(c, 'member', 'POST', '/api/accounts/request-otp')).status, 200);
+  assert.equal(sent.length, 0, 'no HTTP provider was called');
+  assert.deepEqual(messages[0].from, { email: 'vault@example.test', name: 'Vault' });
+  assert.equal(messages[0].to, 'member@example.test');
+  assert.match(String(messages[0].text), /\n\n\d{6}\n\n/);
+
+  refuse = 'E_RECIPIENT_PLAN_RESTRICTED';
+  assert.equal((await call(c, 'owner', 'POST', '/api/accounts/request-otp')).status, 502);
 });
 
 test('the webhook and Resend receive the message, and the subject cannot carry line breaks', async () => {

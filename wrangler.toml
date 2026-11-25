@@ -26,6 +26,11 @@ database_id = "bd14194a-4ce9-4d34-bd2b-4353fe2d9ee8"
 binding = "ATTACHMENTS"
 bucket_name = "nodewarden-attachments"
 
+# Cloudflare Email Sending, used for mail when MAIL_FROM is set and no HTTP provider is.
+# The Workers Free plan delivers only to verified destination addresses.
+[[send_email]]
+name = "EMAIL"
+
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"
 class_name = "NotificationsHub"
