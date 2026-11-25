@@ -161,9 +161,16 @@ npm run dev
 
 ### Optional: outbound mail
 
-Mail is off by default, and then every email-backed route answers 501 as before. Workers cannot
-use SMTP, so mail goes through an HTTP provider. Set these as Worker variables; put the API key
-and webhook token in **Secrets** (`npx wrangler secret put RESEND_API_KEY`), never in `wrangler.toml`.
+Mail is off by default, and then every email-backed route answers 501 as before. Set these as
+Worker variables; put the API key and webhook token in **Secrets**
+(`npx wrangler secret put RESEND_API_KEY`), never in `wrangler.toml`.
+
+The simplest provider is [Cloudflare Email Sending](https://developers.cloudflare.com/email-service/),
+through the `EMAIL` binding that `wrangler.toml` already declares. Onboard your sending domain in
+the dashboard and set only `MAIL_FROM` to an address on it. On the Workers Free plan it delivers only
+to [verified destination addresses](https://developers.cloudflare.com/email-service/configuration/destination-addresses/),
+free and outside the sending quota, which suits a personal vault: verify each account's address.
+Mail to any other address fails with 502 until the account is on Workers Paid.
 
 | Variable | Meaning |
 |---|---|
@@ -171,6 +178,8 @@ and webhook token in **Secrets** (`npx wrangler secret put RESEND_API_KEY`), nev
 | `RESEND_API_KEY` | Send through [Resend](https://resend.com). Takes precedence over the webhook. |
 | `MAIL_WEBHOOK_URL` | Or POST `{from, to, subject, text, html}` as JSON to this public `https://` URL (no query string; private and loopback hosts are refused). |
 | `MAIL_WEBHOOK_TOKEN` | Optional. Sent to the webhook as `Authorization: Bearer <token>`. |
+
+Resend wins over the webhook, and either wins over the `EMAIL` binding.
 
 With mail configured, the server serves email two-step login, email change, account deletion by
 emailed link, verification codes for protected actions, and email verification, and it emails a

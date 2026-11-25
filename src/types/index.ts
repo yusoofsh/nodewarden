@@ -35,6 +35,8 @@ export interface Env {
   RESEND_API_KEY?: string;
   MAIL_WEBHOOK_URL?: string;
   MAIL_WEBHOOK_TOKEN?: string;
+  // Cloudflare Email Sending binding ([[send_email]] in wrangler.toml).
+  EMAIL?: SendEmail;
 }
 
 export type UserRole = 'admin' | 'user';
