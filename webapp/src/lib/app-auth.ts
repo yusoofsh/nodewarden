@@ -53,6 +53,7 @@ export type JwtUnsafeReason = 'missing' | 'too_short';
 export interface BootstrapAppResult {
   defaultKdfIterations: number;
   registrationInviteRequired?: boolean;
+  signupsAllowed?: boolean;
   websiteIconsEnabled: boolean;
   jwtWarning: { reason: JwtUnsafeReason; minLength: number } | null;
   session: SessionState | null;
@@ -64,6 +65,7 @@ export interface BootstrapAppResult {
 export interface InitialAppBootstrapState {
   defaultKdfIterations: number;
   registrationInviteRequired?: boolean;
+  signupsAllowed?: boolean;
   websiteIconsEnabled: boolean;
   jwtWarning: { reason: JwtUnsafeReason; minLength: number } | null;
   session: SessionState | null;
@@ -250,10 +252,11 @@ function readWindowBootstrap(): WebBootstrapResponse {
   return raw && typeof raw === 'object' ? raw : {};
 }
 
-function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialAppBootstrapState, 'defaultKdfIterations' | 'registrationInviteRequired' | 'websiteIconsEnabled' | 'jwtWarning'> {
+function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialAppBootstrapState, 'defaultKdfIterations' | 'registrationInviteRequired' | 'signupsAllowed' | 'websiteIconsEnabled' | 'jwtWarning'> {
   const defaultKdfIterations = Number(boot.defaultKdfIterations || 600000);
   const registrationInviteRequired =
     typeof boot.registrationInviteRequired === 'boolean' ? boot.registrationInviteRequired : undefined;
+  const signupsAllowed = typeof boot.signupsAllowed === 'boolean' ? boot.signupsAllowed : undefined;
   const websiteIconsEnabled = boot.websiteIconsEnabled !== false;
   const jwtUnsafeReason = boot.jwtUnsafeReason || null;
   const jwtWarning = jwtUnsafeReason
@@ -266,6 +269,7 @@ function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialApp
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    signupsAllowed,
     websiteIconsEnabled,
     jwtWarning,
   };
@@ -326,12 +330,19 @@ function buildTransientProfile(token: TokenSuccess, email: string, fallbackProfi
   };
 }
 
-function resolveUnauthenticatedPhase(registrationInviteRequired: boolean | undefined, fallback: AppPhase): AppPhase {
+function resolveUnauthenticatedPhase(
+  registrationInviteRequired: boolean | undefined,
+  signupsAllowed: boolean | undefined,
+  fallback: AppPhase
+): AppPhase {
+  // A disabled signup setting wins over both the empty-instance bootstrap page
+  // and an invite link: there is no form to fill in.
+  if (signupsAllowed === false) return 'login';
   return registrationInviteRequired === false ? 'register' : fallback;
 }
 
 export function readInitialAppBootstrapState(): InitialAppBootstrapState {
-  const { defaultKdfIterations, registrationInviteRequired, websiteIconsEnabled, jwtWarning } = normalizeBootstrapResponse(readWindowBootstrap());
+  const { defaultKdfIterations, registrationInviteRequired, signupsAllowed, websiteIconsEnabled, jwtWarning } = normalizeBootstrapResponse(readWindowBootstrap());
   setWebsiteIconsEnabled(websiteIconsEnabled);
   const session = loadSession();
   const hasInviteCode = !!readInviteCodeFromUrl();
@@ -340,10 +351,11 @@ export function readInitialAppBootstrapState(): InitialAppBootstrapState {
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    signupsAllowed,
     websiteIconsEnabled,
     jwtWarning,
     session,
-    phase: jwtWarning ? 'login' : session ? 'locked' : resolveUnauthenticatedPhase(registrationInviteRequired, unauthenticatedPhase),
+    phase: jwtWarning ? 'login' : session ? 'locked' : resolveUnauthenticatedPhase(registrationInviteRequired, signupsAllowed, unauthenticatedPhase),
   };
 }
 
@@ -352,6 +364,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
   const normalizedBoot = normalizeBootstrapResponse(remoteBoot);
   const defaultKdfIterations = normalizedBoot.defaultKdfIterations || initial.defaultKdfIterations;
   const registrationInviteRequired = normalizedBoot.registrationInviteRequired ?? initial.registrationInviteRequired;
+  const signupsAllowed = normalizedBoot.signupsAllowed ?? initial.signupsAllowed;
   const websiteIconsEnabled = normalizedBoot.websiteIconsEnabled !== false;
   setWebsiteIconsEnabled(websiteIconsEnabled);
   const jwtWarning = normalizedBoot.jwtWarning ?? initial.jwtWarning;
@@ -360,6 +373,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      signupsAllowed,
       websiteIconsEnabled,
       jwtWarning,
       session: null,
@@ -373,11 +387,12 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      signupsAllowed,
       websiteIconsEnabled,
       jwtWarning: null,
       session: null,
       profile: null,
-      phase: resolveUnauthenticatedPhase(registrationInviteRequired, initial.phase),
+      phase: resolveUnauthenticatedPhase(registrationInviteRequired, signupsAllowed, initial.phase),
     };
   }
 
@@ -386,6 +401,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      signupsAllowed,
       websiteIconsEnabled,
       jwtWarning: null,
       session: loaded,
@@ -398,6 +414,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    signupsAllowed,
     websiteIconsEnabled,
     jwtWarning: null,
     session: loaded,

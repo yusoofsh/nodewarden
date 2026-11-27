@@ -8,6 +8,8 @@ export interface Env {
   };
   // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
   HIDE_WEB_VAULT?: string;
+  // "false"/"0"/"no"/"off" disables account registration; unset allows it (invite-only after the first account).
+  SIGNUPS_ALLOWED?: string;
   // R2 bucket for attachment/send-file storage.
   ATTACHMENTS?: R2Bucket;
   JWT_SECRET: string;

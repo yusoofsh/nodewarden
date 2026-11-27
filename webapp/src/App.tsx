@@ -211,6 +211,7 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(initialProfileSnapshot);
   const [defaultKdfIterations, setDefaultKdfIterations] = useState(initialBootstrap.defaultKdfIterations);
   const [registrationInviteRequired, setRegistrationInviteRequired] = useState(initialBootstrap.registrationInviteRequired);
+  const [signupsAllowed, setSignupsAllowed] = useState(initialBootstrap.signupsAllowed);
   const [jwtWarning, setJwtWarning] = useState<{ reason: JwtUnsafeReason; minLength: number } | null>(initialBootstrap.jwtWarning);
 
   const [loginValues, setLoginValues] = useState({ email: '', password: '' });
@@ -334,13 +335,14 @@ export default function App() {
   useEffect(() => {
     if (!inviteCodeFromUrl) return;
     if (phase === 'locked' || phase === 'app') return;
+    if (signupsAllowed === false) return;
     setPhase('register');
     if (location !== '/register') navigate('/register');
     if (typeof window !== 'undefined' && typeof window.history?.replaceState === 'function') {
       window.history.replaceState(null, '', '/register');
     }
     setInviteCodeFromUrl('');
-  }, [inviteCodeFromUrl, phase, location, navigate]);
+  }, [inviteCodeFromUrl, phase, location, navigate, signupsAllowed]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -475,6 +477,7 @@ export default function App() {
       const isDemoPublicSendRoute = /^send\/[^/]+(?:\/[^/]+)?$/i.test(normalizedCurrentHashPath);
       setDefaultKdfIterations(initialBootstrap.defaultKdfIterations);
       setRegistrationInviteRequired(initialBootstrap.registrationInviteRequired);
+      setSignupsAllowed(initialBootstrap.signupsAllowed);
       setJwtWarning(null);
       setSession(null);
       setProfile(null);
@@ -491,6 +494,7 @@ export default function App() {
       if (sessionRef.current?.symEncKey || sessionRef.current?.symMacKey) return;
       setDefaultKdfIterations(boot.defaultKdfIterations);
       setRegistrationInviteRequired(boot.registrationInviteRequired);
+      setSignupsAllowed(boot.signupsAllowed);
       setJwtWarning(boot.jwtWarning);
       setSession(boot.session);
       setProfile(boot.profile);
@@ -2005,6 +2009,10 @@ export default function App() {
   }, [phase, location, isPublicSendRoute, navigate]);
 
   useEffect(() => {
+    if (signupsAllowed === false && location === '/register') navigate('/login');
+  }, [signupsAllowed, location, navigate]);
+
+  useEffect(() => {
     if (phase === 'app' && isImportHashRoute && location !== IMPORT_ROUTE) {
       navigate(IMPORT_ROUTE);
     }
@@ -2279,6 +2287,7 @@ export default function App() {
           passkeyPassword={passkeyPassword}
           registerValues={registerValues}
           registrationInviteRequired={registrationInviteRequired}
+          signupsAllowed={signupsAllowed}
           unlockPassword={unlockPassword}
           emailForLock={profile?.email || session?.email || ''}
           loginHintLoading={loginHintState.loading}
@@ -2303,6 +2312,7 @@ export default function App() {
               pushToast('warning', t('txt_demo_readonly_message'));
               return;
             }
+            if (signupsAllowed === false) return;
             if (inviteCodeFromUrl) {
               setRegisterValues((prev) => ({ ...prev, inviteCode: inviteCodeFromUrl }));
             }

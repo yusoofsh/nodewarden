@@ -6,6 +6,7 @@ import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../s
 import { jsonResponse, errorResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
+import { isSignupsAllowed } from '../config/signups';
 import { isStoredApiKeyHash } from '../utils/api-key';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
@@ -264,6 +265,12 @@ function keysResponse(user: User): Record<string, unknown> {
 // - Any subsequent user must provide a valid inviteCode.
 export async function handleRegister(request: Request, env: Env): Promise<Response> {
   const storage = new StorageService(env.DB);
+
+  // SIGNUPS_ALLOWED=false closes registration for every existing account. The
+  // first account on an empty instance still registers, like Vaultwarden.
+  if (!isSignupsAllowed(env) && (await storage.getUserCount()) > 0) {
+    return errorResponse('Registration is disabled', 403);
+  }
 
   const unsafe = jwtSecretUnsafeReason(env);
   if (unsafe) {

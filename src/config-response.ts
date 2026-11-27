@@ -8,7 +8,7 @@ function buildIconServiceCsp(origin: string): string {
   return `img-src 'self' data: ${origin}`;
 }
 
-export function buildConfigResponse(origin: string) {
+export function buildConfigResponse(origin: string, options: { signupsAllowed?: boolean } = {}) {
   const fillAssistBase = `${origin}/fill-assist/`;
   return {
     version: LIMITS.compatibility.bitwardenServerVersion,
@@ -30,7 +30,7 @@ export function buildConfigResponse(origin: string) {
     },
     communication: null,
     settings: {
-      disableUserRegistration: false,
+      disableUserRegistration: options.signupsAllowed === false,
       suppressOnboardingInterstitials: false,
     },
     _icon_service_url: buildIconServiceTemplate(origin),

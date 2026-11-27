@@ -1,4 +1,5 @@
 import { LIMITS } from './config/limits';
+import { isSignupsAllowed } from './config/signups';
 import {
   handleAccessSend,
   handleAccessSendFile,
@@ -48,6 +49,7 @@ export interface WebBootstrapResponse {
   jwtUnsafeReason: JwtUnsafeReason;
   jwtSecretMinLength: number;
   registrationInviteRequired: boolean;
+  signupsAllowed: boolean;
   webAuthnAllowedOrigins: string[];
   websiteIconsEnabled: boolean;
 }
@@ -276,12 +278,14 @@ export async function buildWebBootstrapResponse(env: Env): Promise<WebBootstrapR
           : null;
   const storage = new StorageService(env.DB);
   const userCount = await storage.getUserCount();
+  const signupsAllowed = isSignupsAllowed(env);
 
   return {
     defaultKdfIterations: LIMITS.auth.defaultKdfIterations,
     jwtUnsafeReason,
     jwtSecretMinLength: LIMITS.auth.jwtSecretMinLength,
     registrationInviteRequired: userCount > 0,
+    signupsAllowed,
     webAuthnAllowedOrigins: getConfiguredWebAuthnAllowedOrigins(env),
     websiteIconsEnabled: isWebsiteIconProxyEnabled(env),
   };
@@ -492,7 +496,7 @@ export async function handlePublicRoute(
     const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
     if (blocked) return blocked;
     const origin = new URL(request.url).origin;
-    return jsonResponse(buildConfigResponse(origin), 200, { 'Cache-Control': 'no-store' });
+    return jsonResponse(buildConfigResponse(origin, { signupsAllowed: isSignupsAllowed(env) }), 200, { 'Cache-Control': 'no-store' });
   }
 
   if ((path === '/alive' || path === '/api/alive' || path === '/api/now') && method === 'GET') {

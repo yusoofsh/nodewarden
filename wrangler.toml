@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 workers_dev = false
 
+[vars]
+# Registration is closed: the first account on an empty database can still be created.
+SIGNUPS_ALLOWED = "false"
+
 [build]
 command = "npm run build"
 
