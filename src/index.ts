@@ -28,14 +28,22 @@ function normalizeRequestUrl(request: Request): Request {
 function addSearchIndexHeaders(request: Request, response: Response): Response {
   const url = new URL(request.url);
   const contentType = String(response.headers.get('Content-Type') || '').toLowerCase();
+  const isHtml = contentType.includes('text/html');
   const shouldNoIndex =
     url.pathname === '/robots.txt' ||
-    contentType.includes('text/html');
+    isHtml;
 
   if (!shouldNoIndex) return response;
 
   const headers = new Headers(response.headers);
   headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  if (isHtml) {
+    // Workers Assets asks for `public, max-age=0, must-revalidate`, which
+    // Cloudflare still serves from cache after a deploy, so browsers kept
+    // loading the previous asset hashes until a manual purge. HTML names the
+    // hashed bundles, so it must never be cached at the edge.
+    headers.set('Cache-Control', 'no-store');
+  }
 
   return new Response(response.body, {
     status: response.status,
