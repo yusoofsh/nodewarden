@@ -142,13 +142,16 @@ export function readCipherRevisionDate(source: any): string | null {
   return revision.present ? normalizeCipherTimestamp(revision.value) : null;
 }
 
-export function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: string | null): boolean {
-  if (!clientRevisionDate) return false;
+export function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: unknown): boolean {
+  const normalizedRevisionDate = normalizeCipherTimestamp(clientRevisionDate);
+  if (!normalizedRevisionDate) return false;
   const existingTs = Date.parse(existingUpdatedAt);
-  const clientTs = Date.parse(clientRevisionDate);
-  if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
-  // Official clients drop the milliseconds of the revision date they echo back.
-  return Math.floor(existingTs / 1000) > Math.floor(clientTs / 1000);
+  const clientTs = Date.parse(normalizedRevisionDate);
+  // The Bitwarden SDK sends whole seconds. An explicit fractional part, including .000, keeps its precision.
+  const wholeSeconds = typeof clientRevisionDate === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/i.test(clientRevisionDate);
+  if (wholeSeconds) return Math.floor(existingTs / 1000) * 1000 > clientTs;
+  return existingTs > clientTs;
 }
 
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
@@ -1012,7 +1015,6 @@ export function buildFullCipherUpdate(
   cipherData: any,
   preserveRevisionDate: boolean
 ): { cipher: Cipher } | { error: string } {
-  const incomingFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
   const incomingKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
   const incomingLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
   const incomingCard = readCipherProp<CipherCard | null>(cipherData, ['card', 'Card']);
@@ -1052,9 +1054,6 @@ export function buildFullCipherUpdate(
     archivedAt: readCipherArchivedAt(cipherData, existingCipher.archivedAt ?? null),
     deletedAt: existingCipher.deletedAt,
   };
-  if (incomingFolderId.present) {
-    cipher.folderId = normalizeOptionalId(incomingFolderId.value);
-  }
   if (incomingKey.present) {
     const normalizedIncomingKey = normalizeCipherKeyForStorage(incomingKey.value);
     cipher.key = normalizedIncomingKey || normalizeCipherKeyForStorage(existingCipher.key);
@@ -1075,6 +1074,7 @@ export function buildFullCipherUpdate(
 
   // Nullable fields use replacement semantics on this full-update endpoint.
   // Some clients omit cleared values, so merge fallback must not resurrect them.
+  cipher.folderId = normalizeOptionalId(readNullableFullUpdateField<string>(cipherData, ['folderId', 'FolderId']));
   cipher.notes = readNullableFullUpdateField<string>(cipherData, ['notes', 'Notes']);
   cipher.fields = readNullableFullUpdateField<Cipher['fields']>(cipherData, ['fields', 'Fields']);
   normalizeCipherForStorage(cipher);
