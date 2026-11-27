@@ -553,9 +553,7 @@ export async function handleDeleteAttachment(
   const cipherResponse = await cipherResponseWithAttachments(storage, cipherId, userId);
 
   return jsonResponse({
-    Cipher: cipherResponse,
     cipher: cipherResponse,
-    Object: 'deleteAttachment',
     object: 'deleteAttachment',
   });
 }
