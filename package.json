@@ -39,7 +39,7 @@
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "deploy": "node scripts/ensure-r2.cjs && wrangler deploy",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo",
-    "test:ci": "npm run test:account-compat && npm run test:kdf-change && npm run test:key-rotation && npm run test:account-keys-v2 && npm run test:webapp-v2-guard && npm run test:config-compatibility && npm run test:profile-two-factor && npm run test:web-crypto && npm run test:notifications-security && npm run test:emergency-access && npm run test:accounts-misc && npm run test:mail && npm run test:signups && npm run test:duo && npm run test:sso && npm run test:webauthn-connectors"
+    "test:ci": "npm run test:account-compat && npm run test:kdf-change && npm run test:key-rotation && npm run test:account-keys-v2 && npm run test:webapp-v2-guard && npm run test:config-compatibility && npm run test:profile-two-factor && npm run test:vault-compatibility && npm run test:web-crypto && npm run test:notifications-security && npm run test:emergency-access && npm run test:accounts-misc && npm run test:mail && npm run test:signups && npm run test:duo && npm run test:sso && npm run test:webauthn-connectors"
   },
   "keywords": [
     "bitwarden",

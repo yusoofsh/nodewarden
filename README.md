@@ -109,7 +109,7 @@ Repository secrets used by **deploy**:
 | `CLOUDFLARE_API_TOKEN` | API token with *Workers Scripts:Edit*, *Workers R2 Storage:Read* and *Write*, *D1:Edit* and *Account Settings:Read* on the account; the "Edit Cloudflare Workers" template covers this |
 | `CLOUDFLARE_ACCOUNT_ID` | the Cloudflare account that owns the Worker |
 
-`npm run test:ci` keeps two scripts out that are not green on `main`: `test:vault-compatibility` (pre-existing failures) and `test:folder-tree` (its test file is missing). Everything it runs has to pass before a deploy starts.
+`npm run test:ci` keeps one script out: `test:folder-tree`, whose test file is missing from the tree. Everything it runs has to pass before a deploy starts.
 
 ## Single sign-on (OpenID Connect)
 
