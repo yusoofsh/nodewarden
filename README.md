@@ -94,6 +94,22 @@
 > R2 bucket names are immutable. If your existing bucket is named differently, either copy its objects into `nodewarden-attachments` or change `bucket_name` in `wrangler.toml`.
 
 
+## CI and deployment
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
+
+1. **test** — installs dependencies, typechecks the Worker and the web vault, builds the web vault, then runs `npm run test:ci`.
+2. **deploy** (pushes to `main` only, after `test` passes) — runs `npm run deploy`, which builds the web vault, creates the attachments bucket if it is missing, and runs `wrangler deploy`.
+
+Repository secrets used by **deploy**:
+
+| Secret | Value |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | API token with *Workers Scripts:Edit*, *Workers R2 Storage:Read* and *Write*, *D1:Edit* and *Account Settings:Read* on the account; the "Edit Cloudflare Workers" template covers this |
+| `CLOUDFLARE_ACCOUNT_ID` | the Cloudflare account that owns the Worker |
+
+`npm run test:ci` keeps two scripts out that are not green on `main`: `test:vault-compatibility` (pre-existing failures) and `test:folder-tree` (its test file is missing). Everything it runs has to pass before a deploy starts.
+
 ## Single sign-on (OpenID Connect)
 
 Off by default: with `SSO_ENABLED` unset the server behaves exactly as without this feature. When it is on, Bitwarden clients sign in through your identity provider (IdP) with the authorization code flow and PKCE, then unlock the vault with the master password as usual.
