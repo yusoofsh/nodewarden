@@ -336,6 +336,7 @@ export default function App() {
     if (!inviteCodeFromUrl) return;
     if (phase === 'locked' || phase === 'app') return;
     if (signupsAllowed === false) return;
+    if (__SIGNUPS_DISABLED__) return;
     setPhase('register');
     if (location !== '/register') navigate('/register');
     if (typeof window !== 'undefined' && typeof window.history?.replaceState === 'function') {
@@ -773,6 +774,7 @@ export default function App() {
   }
 
   async function handleRegister() {
+    if (__SIGNUPS_DISABLED__) return;
     if (pendingAuthAction) return;
     if (IS_DEMO_MODE) {
       pushToast('warning', t('txt_demo_readonly_message'));
@@ -2313,6 +2315,7 @@ export default function App() {
               return;
             }
             if (signupsAllowed === false) return;
+            if (__SIGNUPS_DISABLED__) return;
             if (inviteCodeFromUrl) {
               setRegisterValues((prev) => ({ ...prev, inviteCode: inviteCodeFromUrl }));
             }

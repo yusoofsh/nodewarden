@@ -26,3 +26,5 @@ interface Window {
 }
 
 declare const __NODEWARDEN_DEMO__: boolean;
+/** Build-time flag: the register view and its handlers are compiled out. */
+declare const __SIGNUPS_DISABLED__: boolean;

@@ -261,12 +261,17 @@ function searchIndexPolicyPlugin(isDemo: boolean): Plugin {
 
 export default defineConfig(({ mode }) => {
   const isDemo = mode === 'demo';
+  // This fork ships its public vault without account signup: production builds
+  // drop the register view and its handlers. NW_SIGNUPS_DISABLED=0 restores it,
+  // and development builds always keep the form.
+  const signupsDisabled = mode === 'production' && process.env.NW_SIGNUPS_DISABLED !== '0';
 
   return {
     root: rootDir,
     plugins: [preact(), tailwindcss(), searchIndexPolicyPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
     define: {
       __NODEWARDEN_DEMO__: JSON.stringify(isDemo),
+      __SIGNUPS_DISABLED__: JSON.stringify(signupsDisabled),
     },
     resolve: {
       alias: {

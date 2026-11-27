@@ -337,6 +337,7 @@ function resolveUnauthenticatedPhase(
 ): AppPhase {
   // A disabled signup setting wins over both the empty-instance bootstrap page
   // and an invite link: there is no form to fill in.
+  if (__SIGNUPS_DISABLED__) return 'login';
   if (signupsAllowed === false) return 'login';
   return registrationInviteRequired === false ? 'register' : fallback;
 }
