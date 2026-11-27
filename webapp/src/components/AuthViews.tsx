@@ -196,6 +196,9 @@ export default function AuthViews(props: AuthViewsProps) {
   }
 
   if (props.mode === 'register') {
+    // Production builds of this fork set VITE_SIGNUPS_DISABLED=1, so this
+    // branch and its form are dropped by the minifier instead of shipped.
+    if (import.meta.env.VITE_SIGNUPS_DISABLED === '1') return null;
     return (
       <div className="auth-page">
         <StandalonePageFrame title={t('txt_create_account')} titleAccessory={<NetworkStatusBadge />}>
@@ -358,7 +361,7 @@ export default function AuthViews(props: AuthViewsProps) {
             <KeyRound size={16} className="btn-icon" />
             {passkeyBusy ? t('txt_logging_in') : t('txt_login_with_passkey')}
           </button>
-          {props.signupsAllowed === false ? null : (
+          {props.signupsAllowed === false || import.meta.env.VITE_SIGNUPS_DISABLED === '1' ? null : (
             <>
               <div className="or">{t('txt_or')}</div>
               <button type="button" className="btn btn-secondary full" onClick={props.onGotoRegister} disabled={loginBusy || passkeyBusy}>

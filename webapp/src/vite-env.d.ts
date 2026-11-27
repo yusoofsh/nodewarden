@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  /** "1" builds the web vault without the account register view. */
+  readonly VITE_SIGNUPS_DISABLED?: string;
+}
+
 declare module 'qrcode-generator' {
   interface QrCode {
     addData(data: string): void;
