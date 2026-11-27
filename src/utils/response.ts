@@ -106,6 +106,11 @@ export function applyCors(
   // Security headers applied to every response.
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Passkeys stay usable for this origin; everything the vault does not need is denied.
+  headers.set(
+    'Permissions-Policy',
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), publickey-credentials-get=(self)'
+  );
   const isWebAuthnFrameConnector = new URL(request.url).pathname === '/webauthn-connector.html';
   if (isWebAuthnFrameConnector) {
     // Official desktop and browser clients render this exact endpoint inside a

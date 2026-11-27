@@ -33,6 +33,7 @@ interface AuthViewsProps {
   passkeyPassword: string;
   registerValues: RegisterValues;
   registrationInviteRequired?: boolean;
+  signupsAllowed?: boolean;
   unlockPassword: string;
   emailForLock: string;
   loginHintLoading: boolean;
@@ -357,11 +358,15 @@ export default function AuthViews(props: AuthViewsProps) {
             <KeyRound size={16} className="btn-icon" />
             {passkeyBusy ? t('txt_logging_in') : t('txt_login_with_passkey')}
           </button>
-          <div className="or">{t('txt_or')}</div>
-          <button type="button" className="btn btn-secondary full" onClick={props.onGotoRegister} disabled={loginBusy || passkeyBusy}>
-            <UserPlus size={16} className="btn-icon" />
-            {t('txt_create_account')}
-          </button>
+          {props.signupsAllowed === false ? null : (
+            <>
+              <div className="or">{t('txt_or')}</div>
+              <button type="button" className="btn btn-secondary full" onClick={props.onGotoRegister} disabled={loginBusy || passkeyBusy}>
+                <UserPlus size={16} className="btn-icon" />
+                {t('txt_create_account')}
+              </button>
+            </>
+          )}
             </>
           )}
         </form>
