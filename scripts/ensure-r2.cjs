@@ -8,21 +8,22 @@
  *
  * `wrangler r2 bucket list` has no JSON output in wrangler 4, so read the plain
  * listing, and treat the API's "already exists" (10004) answer as success.
+ * Commands run without a shell so the bucket name is never interpreted.
  */
-const { execSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 
-const BUCKET = process.argv[2] || 'nodewarden-attachments';
+const BUCKET = 'nodewarden-attachments';
 
 function wrangler(args) {
   try {
-    return execSync(`npx wrangler ${args}`, {
+    return execFileSync('npx', ['wrangler', ...args], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     const stdout = String(error.stdout || '');
     const stderr = String(error.stderr || '');
-    const failure = new Error(`wrangler ${args} failed`);
+    const failure = new Error(`wrangler ${args.join(' ')} failed`);
     failure.output = stdout + stderr;
     throw failure;
   }
@@ -35,7 +36,7 @@ function isListed(listing) {
 function main() {
   let listing = '';
   try {
-    listing = wrangler('r2 bucket list');
+    listing = wrangler(['r2', 'bucket', 'list']);
   } catch (error) {
     console.warn(`[ensure-r2] could not list buckets: ${error.output.trim().split('\n')[0] || error.message}`);
   }
@@ -45,7 +46,7 @@ function main() {
   }
 
   try {
-    wrangler(`r2 bucket create "${BUCKET}"`);
+    wrangler(['r2', 'bucket', 'create', BUCKET]);
     console.log(`[ensure-r2] created bucket "${BUCKET}"`);
   } catch (error) {
     if (/already exists|code: 10004/i.test(error.output || '')) {
